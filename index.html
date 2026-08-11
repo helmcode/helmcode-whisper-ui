@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>helmcode-whisper</title>
+<style>
+/* Tokens taken from helmcode.com src/styles/tokens.css. Same names, same order,
+   so the two can be diffed by eye. Nothing here loads from the network. */
+:root {
+  --color-bg: #0a0a0a;
+  --color-surface: #111111;
+  --color-surface-raised: #161616;
+  --color-surface-input: #1a1a1a;
+  --color-surface-input-focus: #1e1e1e;
+  --color-border: rgba(255,255,255,0.09);
+  --color-border-hover: rgba(255,255,255,0.16);
+  --color-border-focus: rgba(255,255,255,0.28);
+  --color-text-primary: #ffffff;
+  --color-text-secondary: rgba(255,255,255,0.55);
+  --color-text-tertiary: rgba(255,255,255,0.35);
+  --color-text-placeholder: rgba(255,255,255,0.22);
+  --color-accent: oklch(51.1% .262 276.966);
+  --color-accent-text: oklch(70% .18 276.966);
+  --color-accent-dim: oklch(51.1% .262 276.966 / 0.10);
+  --color-accent-border: oklch(51.1% .262 276.966 / 0.35);
+  --color-error: rgba(220,80,80,0.90);
+  --color-terminal-red: #ff5f56;
+  --color-terminal-green: #27c93f;
+  --font-sans: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Roboto Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --text-mono: 12px;
+  --text-mono-sm: 10px;
+  --tracking-mono-sm: 0.07em;
+  --leading-body: 1.75;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-6: 24px; --space-8: 32px; --space-12: 48px;
+  --duration-normal: 180ms;
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+  --topbar-height: 56px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+}
+body { margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+/* ── top bar ─────────────────────────────────────────────── */
+header {
+  height: var(--topbar-height);
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: var(--space-6);
+  padding: 0 var(--space-6);
+  border-bottom: 0.5px solid var(--color-border);
+  background: var(--color-surface);
+}
+.brand {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  letter-spacing: 0.02em;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+.brand b { color: var(--color-accent-text); font-weight: 500; }
+
+.rec-controls { display: flex; align-items: center; gap: var(--space-3); flex: 1 1 auto; }
+
+input[type="text"] {
+  background: var(--color-surface-input);
+  border: 0.5px solid var(--color-border);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color var(--duration-normal) var(--ease-smooth),
+              background var(--duration-normal) var(--ease-smooth);
+}
+input[type="text"]::placeholder { color: var(--color-text-placeholder); }
+input[type="text"]:hover { border-color: var(--color-border-hover); }
+input[type="text"]:focus { border-color: var(--color-border-focus); background: var(--color-surface-input-focus); }
+#title { width: 240px; }
+#search { width: 100%; max-width: 420px; }
+
+button {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--color-accent-text);
+  background: var(--color-accent-dim);
+  border: 0.5px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  padding: 10px 18px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--duration-normal) var(--ease-smooth),
+              background var(--duration-normal) var(--ease-smooth);
+}
+button:hover:not(:disabled) { background: var(--color-accent); color: var(--color-bg); }
+button:active:not(:disabled) { transform: scale(0.98); }
+button:disabled { opacity: 0.35; cursor: not-allowed; }
+button.stop { color: var(--color-terminal-red); border-left-color: var(--color-terminal-red); background: rgba(255,95,86,0.10); }
+button.stop:hover { background: var(--color-terminal-red); color: var(--color-bg); }
+button.ghost { background: transparent; border: 0.5px solid var(--color-border); border-left: 0.5px solid var(--color-border); color: var(--color-text-secondary); }
+button.ghost:hover { color: var(--color-text-primary); background: var(--color-surface-raised); }
+
+.meter { width: 120px; height: 3px; background: var(--color-surface-raised); position: relative; overflow: hidden; }
+.meter i { position: absolute; inset: 0 100% 0 0; background: var(--color-accent); transition: right 90ms linear; }
+.meter-row { display: flex; align-items: center; gap: var(--space-2); }
+.meter-row span { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); width: 44px; }
+.elapsed { font-family: var(--font-mono); font-size: var(--text-mono); color: var(--color-accent-text); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-terminal-red); animation: pulse 1.4s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }
+
+/* ── layout ──────────────────────────────────────────────── */
+main { flex: 1 1 auto; display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
+
+aside { border-right: 0.5px solid var(--color-border); overflow-y: auto; background: var(--color-surface); }
+aside .head { padding: var(--space-4) var(--space-4) var(--space-2); }
+
+.meeting {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 0.5px solid var(--color-border);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background var(--duration-normal) var(--ease-smooth);
+}
+.meeting:hover { background: var(--color-surface-raised); }
+.meeting.active { background: var(--color-surface-raised); border-left-color: var(--color-accent); }
+.meeting .t { font-size: 14px; margin-bottom: 3px; }
+.meeting .m { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); letter-spacing: var(--tracking-mono-sm); }
+.meeting .m .pending { color: var(--color-terminal-red); }
+
+section.pane { overflow-y: auto; padding: var(--space-8) var(--space-8) var(--space-12); }
+.wrap { max-width: 760px; }
+
+h1 { font-size: 30px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.15; margin: var(--space-2) 0 var(--space-3); }
+h2 { font-size: 16px; font-weight: 500; margin: var(--space-8) 0 var(--space-3); }
+p, li { color: var(--color-text-secondary); line-height: var(--leading-body); }
+ul { padding-left: 1.1em; margin: 0; }
+li { margin-bottom: var(--space-2); }
+hr { border: none; border-top: 0.5px solid var(--color-border); margin: var(--space-6) 0; }
+
+.meta-line { font-family: var(--font-mono); font-size: var(--text-mono); color: var(--color-text-tertiary); margin-bottom: var(--space-6); }
+
+.task { list-style: none; margin-left: -1.1em; }
+.task::before { content: '□'; color: var(--color-text-tertiary); margin-right: var(--space-2); }
+.who { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-accent-text); margin-left: var(--space-2); letter-spacing: var(--tracking-mono-sm); }
+
+blockquote { margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); background: var(--color-accent-dim); border-left: 3px solid var(--color-accent); color: var(--color-text-primary); }
+blockquote .who { display: block; margin: var(--space-2) 0 0; text-transform: uppercase; color: var(--color-text-tertiary); }
+
+.turn { display: grid; grid-template-columns: 58px 1fr; gap: var(--space-4); margin-bottom: var(--space-3); }
+.turn .t { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); padding-top: 5px; }
+.turn .s { font-family: var(--font-mono); font-size: var(--text-mono-sm); letter-spacing: var(--tracking-mono-sm); text-transform: uppercase; color: var(--color-text-tertiary); }
+.turn.me .s { color: var(--color-accent-text); }
+.turn p { margin: 0; }
+
+.tabs { display: flex; gap: var(--space-4); border-bottom: 0.5px solid var(--color-border); margin-bottom: var(--space-6); }
+.tab { font-family: var(--font-mono); font-size: var(--text-mono); color: var(--color-text-tertiary); padding: var(--space-2) 0 var(--space-3); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab:hover { color: var(--color-text-secondary); }
+.tab.active { color: var(--color-text-primary); border-bottom-color: var(--color-accent); }
+
+.hit { padding: var(--space-4) 0; border-bottom: 0.5px solid var(--color-border); cursor: pointer; }
+.hit:hover .hit-text { color: var(--color-text-primary); }
+.hit-head { font-family: var(--font-mono); font-size: var(--text-mono-sm); letter-spacing: var(--tracking-mono-sm); color: var(--color-text-tertiary); margin-bottom: var(--space-2); }
+.hit-head b { color: var(--color-text-secondary); font-weight: 400; }
+.hit-head .sp { color: var(--color-accent-text); }
+.hit-text { color: var(--color-text-secondary); line-height: var(--leading-body); transition: color var(--duration-normal) var(--ease-smooth); }
+
+.empty { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: var(--text-mono); }
+.warn { color: var(--color-terminal-red); font-family: var(--font-mono); font-size: var(--text-mono); margin-bottom: var(--space-4); }
+
+pre.log {
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.6;
+  background: var(--color-surface); border: 0.5px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  padding: var(--space-3) var(--space-4); overflow-x: auto;
+  color: var(--color-text-secondary); white-space: pre-wrap; margin: 0 0 var(--space-6);
+  max-height: 260px; overflow-y: auto;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">helmcode<b>·</b>whisper</div>
+  <div class="rec-controls">
+    <input type="text" id="title" placeholder="título de la reunión" value="">
+    <button id="rec">● grabar</button>
+    <div id="live" style="display:none; align-items:center; gap:16px;">
+      <div class="dot"></div>
+      <div class="elapsed" id="elapsed">00:00:00</div>
+      <div id="meters"></div>
+    </div>
+  </div>
+  <input type="text" id="search" placeholder="buscar en todo el histórico…">
+</header>
+
+<main>
+  <aside>
+    <div class="head"><div class="eyebrow">reuniones</div></div>
+    <div id="meetings"></div>
+  </aside>
+  <section class="pane"><div class="wrap" id="pane"></div></section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let state = { recording: null, processing: null, meetings: [], home: '' };
+let selected = null;
+let tab = 'notes';
+let detail = null;
+let searching = false;
+
+const hms = (s) => {
+  s = Math.floor(s || 0);
+  return [s/3600, (s%3600)/60, s%60].map(n => String(Math.floor(n)).padStart(2,'0')).join(':');
+};
+const mmss = (s) => {
+  s = Math.floor(s || 0);
+  return String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+};
+const esc = (t) => (t ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+// ── polling ───────────────────────────────────────────────
+async function refresh() {
+  try { state = await api('/api/state'); } catch (e) { return; }
+  renderHeader();
+  renderMeetings();
+  if (state.processing && !state.processing.done && !searching) renderDetail();
+}
+
+function schedule() {
+  const busy = state.recording || (state.processing && !state.processing.done);
+  setTimeout(async () => { await refresh(); schedule(); }, busy ? 400 : 4000);
+}
+
+// ── header ────────────────────────────────────────────────
+function renderHeader() {
+  const live = state.recording;
+  $('live').style.display = live ? 'flex' : 'none';
+  $('title').style.display = live ? 'none' : 'block';
+  $('rec').textContent = live ? '■ parar' : '● grabar';
+  $('rec').className = live ? 'stop' : '';
+  if (!live) return;
+  $('elapsed').textContent = hms(live.elapsed);
+  $('meters').innerHTML = live.tracks.map(t => `
+    <div class="meter-row">
+      <span>${esc(t.label)}</span>
+      <div class="meter"><i style="right:${Math.max(0, 100 - Math.min(100, t.level*160))}%"></i></div>
+    </div>`).join('');
+}
+
+$('rec').onclick = async () => {
+  $('rec').disabled = true;
+  try {
+    if (state.recording) {
+      const result = await api('/api/record/stop', { method: 'POST' });
+      await refresh();
+      select(result.meeting);
+      if (result.silent_tracks?.length) {
+        alert('Estas pistas salieron en silencio: ' + result.silent_tracks.join(', '));
+      }
+    } else {
+      await api('/api/record/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: $('title').value || 'reunión' })
+      });
+      $('title').value = '';
+      await refresh();
+    }
+  } catch (e) { alert(e.message); }
+  $('rec').disabled = false;
+};
+
+// ── meetings ──────────────────────────────────────────────
+function renderMeetings() {
+  $('meetings').innerHTML = state.meetings.map(m => `
+    <div class="meeting ${m.name === selected ? 'active' : ''}" data-name="${esc(m.name)}">
+      <div class="t">${esc(m.title)}</div>
+      <div class="m">${esc(m.date)} · ${mmss(m.seconds)}${m.processed ? '' : ' · <span class="pending">sin procesar</span>'}</div>
+    </div>`).join('') || '<div class="head empty">todavía nada</div>';
+  document.querySelectorAll('.meeting').forEach(el => {
+    el.onclick = () => select(el.dataset.name);
+  });
+}
+
+async function select(name) {
+  searching = false;
+  $('search').value = '';
+  selected = name;
+  tab = 'notes';
+  detail = await api('/api/meeting?name=' + encodeURIComponent(name));
+  renderMeetings();
+  renderDetail();
+}
+
+// ── detail ────────────────────────────────────────────────
+function renderDetail() {
+  if (!selected || !detail) { $('pane').innerHTML = '<div class="empty">selecciona una reunión</div>'; return; }
+  const meta = detail.meta || {};
+  const running = state.processing && state.processing.meeting === selected && !state.processing.done;
+
+  let html = `<div class="eyebrow">notas de reunión</div>
+    <h1>${esc(meta.title || selected)}</h1>
+    <div class="meta-line">${esc((meta.started_at || '').replace('T',' ').slice(0,16))} · ${Math.round((meta.duration_seconds||0)/60)} min${
+      (meta.speakers||[]).length ? ' · ' + esc(meta.speakers.join(', ')) : ''}</div>`;
+
+  if (running || (state.processing && state.processing.meeting === selected)) {
+    html += `<pre class="log">${esc((state.processing.lines||[]).join('\n'))}</pre>`;
+  }
+
+  if (!detail.notes) {
+    html += running
+      ? '<div class="empty">procesando…</div>'
+      : `<button id="go">procesar ahora</button>
+         <p class="empty" style="margin-top:16px">transcribe, separa hablantes y escribe las notas</p>`;
+    $('pane').innerHTML = html;
+    const go = $('go');
+    if (go) go.onclick = async () => {
+      go.disabled = true;
+      try {
+        await api('/api/process', { method:'POST', headers:{'Content-Type':'application/json'},
+                                    body: JSON.stringify({ meeting: selected }) });
+        await refresh();
+      } catch (e) { alert(e.message); go.disabled = false; }
+    };
+    return;
+  }
+
+  const n = detail.notes;
+  html += `<div class="tabs">
+      <div class="tab ${tab==='notes'?'active':''}" data-tab="notes">notas</div>
+      <div class="tab ${tab==='transcript'?'active':''}" data-tab="transcript">transcripción</div>
+    </div>`;
+
+  if (tab === 'notes') {
+    html += `<h2>Resumen</h2><p>${esc(n.summary)}</p>`;
+    if (n.decisions?.length) html += `<h2>Decisiones</h2><ul>${n.decisions.map(d=>`<li>${esc(d)}</li>`).join('')}</ul>`;
+    if (n.action_items?.length) html += `<h2>Action items</h2><ul>${n.action_items.map(a=>{
+      const who = [a.owner, a.due].filter(Boolean).join(' · ');
+      return `<li class="task">${esc(a.task)}${who?`<span class="who">${esc(who)}</span>`:''}</li>`;
+    }).join('')}</ul>`;
+    if (n.open_questions?.length) html += `<h2>Preguntas abiertas</h2><ul>${n.open_questions.map(q=>`<li>${esc(q)}</li>`).join('')}</ul>`;
+    if (n.quotes?.length) html += `<h2>Citas</h2>${n.quotes.map(q=>
+      `<blockquote>${esc(q.text)}<span class="who">${esc(q.speaker||'—')}</span></blockquote>`).join('')}`;
+    html += `<hr><button class="ghost" id="reprocess">volver a procesar</button>`;
+  } else {
+    html += (detail.transcript||[]).map(t => `
+      <div class="turn ${t.speaker==='Me'?'me':''}">
+        <div class="t">${mmss(t.start)}</div>
+        <div><div class="s">${esc(t.speaker)}</div><p>${esc(t.text)}</p></div>
+      </div>`).join('') || '<div class="empty">sin transcripción</div>';
+  }
+
+  $('pane').innerHTML = html;
+  document.querySelectorAll('.tab').forEach(el => el.onclick = () => { tab = el.dataset.tab; renderDetail(); });
+  const again = $('reprocess');
+  if (again) again.onclick = async () => {
+    again.disabled = true;
+    try {
+      await api('/api/process', { method:'POST', headers:{'Content-Type':'application/json'},
+                                  body: JSON.stringify({ meeting: selected }) });
+      await refresh();
+    } catch (e) { alert(e.message); again.disabled = false; }
+  };
+}
+
+// ── search ────────────────────────────────────────────────
+let searchTimer = null;
+$('search').oninput = () => {
+  clearTimeout(searchTimer);
+  const term = $('search').value.trim();
+  if (!term) { searching = false; renderDetail(); return; }
+  searchTimer = setTimeout(() => runSearch(term), 350);
+};
+
+async function runSearch(term) {
+  searching = true;
+  selected = null;
+  renderMeetings();
+  $('pane').innerHTML = '<div class="empty">buscando…</div>';
+  try {
+    const result = await api('/api/search?q=' + encodeURIComponent(term));
+    let html = `<div class="eyebrow">resultados</div><h1>${esc(term)}</h1>`;
+    if (!result.semantic) html += '<div class="warn">solo búsqueda por palabras — sin embeddings disponibles</div>';
+    html += result.hits.length ? result.hits.map(h => `
+      <div class="hit">
+        <div class="hit-head"><b>${esc(h.meeting)}</b> · ${esc(h.date)} · ${mmss(h.start)} · <span class="sp">${esc(h.speaker)}</span></div>
+        <div class="hit-text">${esc(h.text)}</div>
+      </div>`).join('') : '<div class="empty">nada encontrado</div>';
+    $('pane').innerHTML = html;
+  } catch (e) {
+    $('pane').innerHTML = `<div class="warn">${esc(e.message)}</div>`;
+  }
+}
+
+refresh().then(() => { renderDetail(); schedule(); });
+</script>
+</body>
+</html>
