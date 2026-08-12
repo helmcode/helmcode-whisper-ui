@@ -174,6 +174,23 @@ def devices_snapshot() -> dict:
     if cached and now - cached_at < 5.0:
         return cached
 
+    # Never re-enumerate while a take is in progress. Finding the loopback
+    # constructs a PyAudio instance and terminates it, which initialises and
+    # tears down PortAudio; doing that every few seconds underneath a live
+    # WASAPI stream in the same process is a risk with no upside, because the
+    # devices cannot change mid-recording anyway — the UI shows the ones the
+    # recording is actually using. An hour-long meeting is not the place to
+    # find out how well reference counting holds up.
+    if recording is not None:
+        if cached:
+            return cached
+        snapshot = {
+            "mic": recording.tracks[0][1].device.name if recording.tracks else None,
+            "system": recording.tracks[1][1].device.name if len(recording.tracks) > 1 else None,
+        }
+        _devices_cache = (now, snapshot)
+        return snapshot
+
     try:
         mic = find_mic_device()
         system = find_system_device()
