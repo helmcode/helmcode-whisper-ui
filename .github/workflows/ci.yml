@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same pairs the tool itself is gated on. The interface imports the
+        # package, so a break in either direction should show up here.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check out helmcode-whisper next to it
+        uses: actions/checkout@v5
+        with:
+          repository: helmcode/helmcode-whisper
+          path: helmcode-whisper
+          token: ${{ secrets.HELMCODE_WHISPER_TOKEN || github.token }}
+
+      - name: Install ffmpeg and PortAudio (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libportaudio2
+
+      - uses: astral-sh/setup-uv@v6
+
+      # The interface has no dependencies of its own — standard library plus the
+      # package — so this installs the package and pytest and nothing else.
+      - name: Install
+        run: |
+          uv venv --python ${{ matrix.python-version }}
+          uv pip install -e ./helmcode-whisper
+          uv pip install pytest ruff
+
+      - name: Lint
+        run: uv run ruff check .
+
+      # No test here opens a socket, an audio device or the network: they cover
+      # path resolution, the space registry, the notes editor and the iCalendar
+      # subset. Anything needing a real device is run by hand.
+      - name: Test
+        run: uv run pytest -q

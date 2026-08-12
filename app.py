@@ -1066,9 +1066,10 @@ def main() -> None:
         # running this from anywhere else silently loses the key and degrades
         # search to keyword matching. Say so before that confuses anyone.
         print("warning: no HELMCODE_API_KEY found.")
-        print("         run this from the helmcode-whisper checkout, e.g.")
-        print("         cd C:\\dev\\Helmcode-whisper && "
-              ".venv\\Scripts\\python.exe ..\\helmcode-whisper-ui\\app.py")
+        print("         helmcode-whisper looks for .env by walking up from the working")
+        print("         directory, so run this from your helmcode-whisper checkout:")
+        print(f"           cd <your helmcode-whisper checkout> && {sys.executable} "
+              f"{Path(__file__).resolve()}")
         print("         recording works; processing and semantic search do not.\n")
 
     if args.host != "127.0.0.1":
