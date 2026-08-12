@@ -183,11 +183,18 @@ aside {
 /* the start dialog */
 .field { margin-bottom: var(--space-4); }
 .field label { display: block; margin-bottom: var(--space-2); }
-.devlist { font-family: var(--font-mono); font-size: var(--text-mono); line-height: 1.9; }
-.devlist div { display: flex; gap: var(--space-2); }
-.devlist b { font-weight: 400; color: var(--color-text-tertiary); width: 62px; flex: 0 0 auto; }
-.devlist .ok { color: var(--color-text-secondary); }
-.devlist .missing { color: var(--color-terminal-amber); }
+/* Stacked, not two columns. The label and the device name were side by side
+   with the label on a fixed width, so "los demás" wrapped onto a second line
+   in ten-pixel type while the device name it belonged to sat next to it. */
+.devlist > div { margin-bottom: var(--space-3); }
+.devlist > div:last-child { margin-bottom: 0; }
+.devlist .what {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); text-transform: uppercase;
+  color: var(--color-text-tertiary); margin-bottom: 3px;
+}
+.devlist .which { font-size: 14px; line-height: 1.4; color: var(--color-text-primary); }
+.devlist .which.missing { color: var(--color-terminal-amber); }
 .note {
   font-family: var(--font-mono); font-size: var(--text-mono-sm); line-height: 1.6;
   letter-spacing: var(--tracking-mono-sm); color: var(--color-terminal-amber);
@@ -534,10 +541,16 @@ $('rec').onclick = () => {
     <div class="field">
       <label class="eyebrow">se va a grabar de</label>
       <div class="devlist">
-        <div><b>tú</b><span class="${devices.mic ? 'ok' : 'missing'}">${
-          esc(devices.mic || 'ningún micrófono encontrado')}</span></div>
-        <div><b>los demás</b><span class="${devices.system ? 'ok' : 'missing'}">${
-          esc(devices.system || 'sin audio de sistema')}</span></div>
+        <div>
+          <div class="what">tú · micrófono</div>
+          <div class="which ${devices.mic ? '' : 'missing'}">${
+            esc(devices.mic || 'ningún micrófono encontrado')}</div>
+        </div>
+        <div>
+          <div class="what">los demás · audio del sistema</div>
+          <div class="which ${devices.system ? '' : 'missing'}">${
+            esc(devices.system || 'sin audio de sistema')}</div>
+        </div>
       </div>
     </div>
     ${devices.system ? '' : `<div class="note">Sin audio de sistema solo se grabará tu
@@ -684,8 +697,8 @@ peticiones a internet. Sirve para mandársela a alguien que no tiene la herramie
          >nombres de las voces</button>` : ''}
     <button class="ghost" data-act="rename" title="Cambiar el título de la reunión">renombrar</button>
     <button class="ghost" data-act="reveal"
-      title="Abre el explorador en la carpeta de esta reunión: el audio, las notas y el transcript"
-      >ver ficheros</button>
+      title="Abre el explorador de Windows en la carpeta donde están el audio, las notas y el transcript de esta reunión"
+      >abrir en el explorador</button>
     <button class="ghost danger" data-act="delete">borrar</button>
   </div>`;
 
