@@ -28,8 +28,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-import ical
-
 from helmcode_whisper.api import HelmcodeClient
 from helmcode_whisper.capture import (
     find_mic_device,
@@ -44,6 +42,8 @@ from helmcode_whisper.pipeline.model import Transcript
 from helmcode_whisper.pipeline.search import search_hits
 from helmcode_whisper.pipeline.speakers import propose_names
 from helmcode_whisper.store import Meeting
+
+import ical
 
 HERE = Path(__file__).parent
 CONFIG = load_config()
@@ -781,10 +781,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(attach_calendar(resolve(payload["meeting"]), payload["uid"]))
             elif route.path == "/api/speakers/detect":
                 self._send(detect_speakers(resolve(payload["meeting"])))
-            elif route.path == "/api/reveal":
-                meeting = resolve(payload["meeting"])
-                os.startfile(meeting.path)  # noqa: S606 — a local tool, by design
-                self._send({"ok": True})
             else:
                 self._send({"error": "not found"}, 404)
         except FileNotFoundError:

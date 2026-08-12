@@ -261,19 +261,6 @@ select {
 }
 select:hover { border-color: var(--color-border-hover); }
 
-/* calendar picker inside the start dialog */
-.cal { max-height: 190px; overflow-y: auto; border: 0.5px solid var(--color-border); }
-.calrow {
-  padding: var(--space-2) var(--space-3); cursor: pointer;
-  border-bottom: 0.5px solid var(--color-border); border-left: 2px solid transparent;
-}
-.calrow:last-child { border-bottom: none; }
-.calrow:hover { background: var(--color-surface-raised); }
-.calrow.on { border-left-color: var(--color-accent); background: var(--color-surface-raised); }
-.calrow .when { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); }
-.calrow .what { font-size: 14px; }
-.calrow .who { display: block; margin: 2px 0 0; color: var(--color-text-tertiary); }
-
 /* speaker proposals */
 .prop { font-family: var(--font-mono); font-size: var(--text-mono-sm); line-height: 1.5; margin-top: 3px; }
 .prop.high { color: var(--color-terminal-green); }
@@ -288,6 +275,13 @@ section.pane { overflow-y: auto; flex: 1 1 auto; padding: var(--space-8) var(--s
 
 h1 { font-size: 32px; font-weight: 500; letter-spacing: -0.025em; line-height: 1.12; margin: var(--space-2) 0 var(--space-3); }
 h1 input { font-size: 32px; font-family: var(--font-sans); font-weight: 500; letter-spacing: -0.025em; padding: 2px 6px; margin-left: -7px; }
+/* Renaming was a button in a row of six. The title is the thing being renamed,
+   so it is the thing you click. */
+h1.editable { cursor: text; display: inline-block; padding: 0 6px; margin-left: -6px;
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--duration-fast) var(--ease-smooth),
+              background var(--duration-fast) var(--ease-smooth); }
+h1.editable:hover { background: var(--color-surface-raised); border-bottom-color: var(--color-border-hover); }
 h2 { font-size: 15px; font-weight: 500; margin: var(--space-8) 0 var(--space-3); letter-spacing: -0.01em; }
 p, li { color: var(--color-text-secondary); line-height: var(--leading-body); }
 ul { padding-left: 1.1em; margin: 0; }
@@ -859,7 +853,8 @@ function renderDetail() {
   const running = proc && !proc.done;
 
   let html = `<div class="eyebrow">notas de reunión</div>
-    <h1 id="h1">${esc(meta.title || selected)}</h1>
+    <h1 id="h1" class="editable" title="Clic para cambiar el título">${
+      esc(meta.title || selected)}</h1>
     <div class="meta-line">
       <span>${esc((meta.started_at || '').replace('T',' ').slice(0,16))}</span>
       <span>${Math.round((meta.duration_seconds||0)/60)} min</span>
@@ -885,15 +880,6 @@ peticiones a internet. Sirve para mandársela a alguien que no tiene la herramie
       ? `<button class="ghost" data-act="speakers"
            title="Poner nombre a cada voz que detectó la diarización"
          >nombres de las voces</button>` : ''}
-    ${(detail.meta || {}).calendar_summary
-      ? '' : (state.calendar?.configured && (state.calendar.events||[]).length
-        ? `<button class="ghost" data-act="link"
-             title="Asociar esta grabación a un evento del calendario para traer la lista de asistentes"
-           >vincular al calendario</button>` : '')}
-    <button class="ghost" data-act="rename" title="Cambiar el título de la reunión">renombrar</button>
-    <button class="ghost" data-act="reveal"
-      title="Abre el explorador de Windows en la carpeta donde están el audio, las notas y el transcript de esta reunión"
-      >abrir en el explorador</button>
     <button class="ghost danger" data-act="delete">borrar</button>
   </div>`;
 
@@ -988,6 +974,9 @@ function paint(html) {
     el.onclick = () => seekTo(parseFloat(el.dataset.start)));
   document.querySelectorAll('[data-act]').forEach(el => el.onclick = () => act(el.dataset.act, el));
 
+  const heading = $('h1');
+  if (heading && heading.classList.contains('editable')) heading.onclick = startRename;
+
   const picker = $('spacesel');
   if (picker) picker.onchange = async () => {
     let space = picker.value;
@@ -1007,57 +996,6 @@ function paint(html) {
   if (nowTurn >= 0) markNow(nowTurn, false);
 }
 
-// ── calendar ──────────────────────────────────────────────────
-function calendarPicker(events, { onPick, title, message }) {
-  return new Promise(resolve => {
-    let chosen = null;
-    const scrim = document.createElement('div');
-    scrim.className = 'scrim';
-    scrim.innerHTML = `<div class="modal">
-      <div class="eyebrow">calendario</div><h3>${esc(title)}</h3>
-      <p>${esc(message)}</p>
-      <div class="cal">${events.map((e, i) => `
-        <div class="calrow" data-i="${i}">
-          <div class="when">${esc(e.start.slice(11,16))}–${esc(e.end.slice(11,16))} · ${
-            esc(e.start.slice(0,10))}</div>
-          <div class="what">${esc(e.summary)}</div>
-          ${e.people?.length ? `<span class="who when">${esc(e.people.join(' · '))}</span>` : ''}
-        </div>`).join('')}</div>
-      <div class="row" style="margin-top:16px">
-        <button class="ghost" data-no>cancelar</button>
-        <button data-yes disabled>usar este evento</button>
-      </div></div>`;
-    const close = (v) => { scrim.remove(); resolve(v); };
-    scrim.querySelectorAll('.calrow').forEach(row => {
-      row.onclick = () => {
-        scrim.querySelectorAll('.calrow').forEach(r => r.classList.remove('on'));
-        row.classList.add('on');
-        chosen = events[Number(row.dataset.i)];
-        scrim.querySelector('[data-yes]').disabled = false;
-      };
-    });
-    scrim.querySelector('[data-no]').onclick = () => close(null);
-    scrim.querySelector('[data-yes]').onclick = () => { close(chosen); onPick?.(chosen); };
-    scrim.onclick = (e) => { if (e.target === scrim) close(null); };
-    document.body.appendChild(scrim);
-  });
-}
-
-async function linkToCalendar() {
-  const events = state.calendar?.events || [];
-  if (!events.length) { toast('no hay eventos cerca en el calendario'); return; }
-  const chosen = await calendarPicker(events, {
-    title: 'Vincular al calendario',
-    message: 'Trae el título y la lista de asistentes, que es lo que permite acertar con los '
-      + 'nombres de las voces.',
-  });
-  if (!chosen) return;
-  try {
-    detail = await post('/api/calendar/attach', { meeting: selected, uid: chosen.uid });
-    renderDetail();
-    toast(`vinculada · ${detail.invitees.length} invitados`, 'good');
-  } catch (e) { toast(e.message, 'bad'); }
-}
 
 async function act(what, element) {
   try {
@@ -1067,8 +1005,6 @@ async function act(what, element) {
       await refresh();
     } else if (what === 'html') {
       window.open('/api/file?name=' + encodeURIComponent(selected) + '&file=notes.html', '_blank');
-    } else if (what === 'reveal') {
-      await post('/api/reveal', { meeting: selected });
     } else if (what === 'speakers') {
       editingSpeakers = !editingSpeakers; renderDetail();
     } else if (what === 'cancel-speakers') {
@@ -1089,8 +1025,6 @@ async function act(what, element) {
       });
       toast(filled ? `${filled} nombres propuestos — revísalos y guarda`
                    : 'el transcript no dice cómo se llaman');
-    } else if (what === 'link') {
-      await linkToCalendar();
     } else if (what === 'save-speakers') {
       const names = {};
       document.querySelectorAll('[data-speaker]').forEach(input => {
@@ -1101,8 +1035,6 @@ async function act(what, element) {
       renderDetail();
       await refresh();
       toast('nombres guardados', 'good');
-    } else if (what === 'rename') {
-      startRename();
     } else if (what === 'delete') {
       const ok = await confirmDialog(
         'Borrar la reunión',
@@ -1120,6 +1052,10 @@ async function act(what, element) {
 
 function startRename() {
   const heading = $('h1');
+  // The heading keeps its click handler while it holds the input, so clicking
+  // into the field you are typing in would otherwise start the rename again
+  // and throw away what you had written.
+  if (!heading || heading.querySelector('input')) return;
   const current = (detail.meta || {}).title || selected;
   heading.innerHTML = `<input type="text" id="newtitle" value="${esc(current)}">`;
   const input = $('newtitle');

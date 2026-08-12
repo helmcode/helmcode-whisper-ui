@@ -1,0 +1,13 @@
+# Same settings as the helmcode-whisper repo, so code moving between the two
+# does not get reformatted on arrival.
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[lint.isort]
+# Without this, ruff classifies `ical` as third-party when it is invoked from
+# outside this directory and first-party when invoked from inside, so the import
+# block gets "fixed" in opposite directions depending on where you ran it.
+known-first-party = ["ical"]

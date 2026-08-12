@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -149,7 +149,7 @@ def _parse_moment(value: str, params: dict[str, str]) -> tuple[datetime, bool]:
         return day, True
 
     if value.endswith("Z"):
-        moment = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        moment = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
         return moment.astimezone().replace(tzinfo=None), False
 
     moment = datetime.strptime(value, "%Y%m%dT%H%M%S")

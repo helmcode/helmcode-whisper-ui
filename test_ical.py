@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import ical
 
@@ -70,7 +70,7 @@ def test_utc_times_are_converted_to_local() -> None:
 
     # Whatever this machine's offset is, the hour must not be read as 09:00 local.
     expected = (
-        datetime(2026, 8, 12, 9, 0, tzinfo=ical.timezone.utc).astimezone().replace(tzinfo=None)
+        datetime(2026, 8, 12, 9, 0, tzinfo=UTC).astimezone().replace(tzinfo=None)
     )
     assert parsed.start == expected
 
