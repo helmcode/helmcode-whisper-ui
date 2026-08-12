@@ -228,6 +228,59 @@ aside {
 .pill.pending { color: var(--color-terminal-amber); border-color: rgba(255,189,46,0.3); }
 .pill.busy { color: var(--color-accent-text); border-color: var(--color-accent-border); }
 
+/* spaces: a label on a meeting, never a directory on disk */
+.addspace {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.addspace:hover { color: var(--color-accent-text); }
+.spacehead {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  cursor: pointer; user-select: none;
+  border-top: 0.5px solid var(--color-border);
+}
+.spacehead:hover .name { color: var(--color-text-primary); }
+.spacehead .caret { font-size: 9px; color: var(--color-text-tertiary); width: 8px; }
+.spacehead .name {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); text-transform: uppercase;
+  color: var(--color-text-secondary); flex: 1 1 auto;
+}
+.spacehead .n { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-placeholder); }
+.spacehead .edit { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-placeholder); opacity: 0; }
+.spacehead:hover .edit { opacity: 1; }
+.spacehead .edit:hover { color: var(--color-accent-text); }
+.meeting { padding-left: var(--space-5); }
+
+select {
+  background: var(--color-surface-input); color: var(--color-text-primary);
+  border: 0.5px solid var(--color-border); font-family: var(--font-mono);
+  font-size: var(--text-mono); padding: 9px 10px; outline: none; cursor: pointer;
+}
+select:hover { border-color: var(--color-border-hover); }
+
+/* calendar picker inside the start dialog */
+.cal { max-height: 190px; overflow-y: auto; border: 0.5px solid var(--color-border); }
+.calrow {
+  padding: var(--space-2) var(--space-3); cursor: pointer;
+  border-bottom: 0.5px solid var(--color-border); border-left: 2px solid transparent;
+}
+.calrow:last-child { border-bottom: none; }
+.calrow:hover { background: var(--color-surface-raised); }
+.calrow.on { border-left-color: var(--color-accent); background: var(--color-surface-raised); }
+.calrow .when { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); }
+.calrow .what { font-size: 14px; }
+.calrow .who { display: block; margin: 2px 0 0; color: var(--color-text-tertiary); }
+
+/* speaker proposals */
+.prop { font-family: var(--font-mono); font-size: var(--text-mono-sm); line-height: 1.5; margin-top: 3px; }
+.prop.high { color: var(--color-terminal-green); }
+.prop.medium { color: var(--color-terminal-amber); }
+.prop.low { color: var(--color-text-placeholder); }
+.prop q { color: var(--color-text-tertiary); font-style: normal; }
+
 /* ── main pane ─────────────────────────────────────────────── */
 .panewrap { display: flex; flex-direction: column; min-height: 0; }
 section.pane { overflow-y: auto; flex: 1 1 auto; padding: var(--space-8) var(--space-8) var(--space-12); }
@@ -382,7 +435,13 @@ pre.log.failed { border-left-color: var(--color-terminal-red); }
 
 <main>
   <aside>
-    <div class="listhead"><div class="eyebrow">reuniones</div><div class="count" id="count"></div></div>
+    <div class="listhead">
+      <div class="eyebrow">reuniones</div>
+      <div style="display:flex;gap:10px;align-items:baseline">
+        <div class="count" id="count"></div>
+        <div class="addspace" id="addspace" title="Crear un espacio">+ espacio</div>
+      </div>
+    </div>
     <div id="meetings"></div>
   </aside>
 
@@ -407,6 +466,7 @@ const $ = (id) => document.getElementById(id);
 let state = { recording: null, processing: null, meetings: [], devices: {}, home: '' };
 let selected = null, detail = null, tab = 'notes', searching = false;
 let highlightAt = null, editingSpeakers = false, nowTurn = -1, following = true;
+let speakerProposals = {};
 
 const audio = $('audio');
 
@@ -529,14 +589,24 @@ function renderRecord() {
 // search field, so it gets a dialog of its own.
 $('rec').onclick = () => {
   const devices = state.devices || {};
+  // The event on the calendar right now is almost always the meeting being
+  // recorded, so it becomes the suggested title and, more usefully, brings the
+  // invitee list along for naming the voices later.
+  const suggestion = state.calendar?.now || null;
+  let uid = suggestion?.uid || '';
+
   const scrim = document.createElement('div');
   scrim.className = 'scrim';
   scrim.innerHTML = `<div class="modal">
     <div class="eyebrow">nueva reunión</div>
     <h3>Grabar</h3>
+    ${suggestion ? `<p style="margin:0 0 16px">Según el calendario ahora mismo tienes
+      <b style="color:var(--color-text-primary);font-weight:400">${esc(suggestion.summary)}</b>${
+      suggestion.people?.length ? ` con ${esc(suggestion.people.join(', '))}` : ''}.</p>` : ''}
     <div class="field">
       <label class="eyebrow">título</label>
-      <input type="text" id="newmeeting" placeholder="reunión" value="">
+      <input type="text" id="newmeeting" placeholder="reunión"
+             value="${esc(suggestion?.summary || '')}">
     </div>
     <div class="field">
       <label class="eyebrow">se va a grabar de</label>
@@ -567,7 +637,14 @@ $('rec').onclick = () => {
     const title = $('newmeeting').value.trim() || 'reunión';
     close();
     try {
-      await post('/api/record/start', { title });
+      const started = await post('/api/record/start', { title });
+      // Attach the calendar event now rather than after the meeting: the
+      // invitee list is what the speaker-name guesser needs, and remembering
+      // to come back and link it later is exactly what nobody does.
+      if (uid) {
+        try { await post('/api/calendar/attach', { meeting: started.meeting, uid }); }
+        catch { toast('grabando, pero no pude vincular el evento del calendario'); }
+      }
       await refresh();
     } catch (e) { toast(e.message, 'bad'); }
   };
@@ -599,11 +676,11 @@ $('recstop').onclick = async () => {
 };
 
 // ── meetings ──────────────────────────────────────────────
-function renderMeetings() {
-  const busyOn = state.processing && !state.processing.done ? state.processing.meeting : null;
-  $('count').textContent = state.meetings.length || '';
-  $('meetings').innerHTML = state.meetings.map(m => `
-    <div class="meeting ${m.name === selected ? 'active' : ''}" data-name="${esc(m.name)}">
+const UNASSIGNED = '__none__';
+let collapsed = new Set(JSON.parse(localStorage.getItem('hcw-collapsed') || '[]'));
+
+function meetingRow(m, busyOn) {
+  return `<div class="meeting ${m.name === selected ? 'active' : ''}" data-name="${esc(m.name)}">
       <div class="t">${esc(m.title)}</div>
       <div class="m">
         <span>${esc(m.date)}</span><span>${mmss(m.seconds)}</span>
@@ -611,8 +688,114 @@ function renderMeetings() {
           : (m.processed ? '' : '<span class="pill pending">sin procesar</span>')}
         ${(m.speakers || []).length ? `<span class="pill">${m.speakers.length} voces</span>` : ''}
       </div>
-    </div>`).join('') || `<div class="listhead empty">todavía nada</div>`;
-  document.querySelectorAll('.meeting').forEach(el => { el.onclick = () => select(el.dataset.name); });
+    </div>`;
+}
+
+function renderMeetings() {
+  const busyOn = state.processing && !state.processing.done ? state.processing.meeting : null;
+  const spaces = state.spaces || [];
+  $('count').textContent = state.meetings.length || '';
+
+  if (!state.meetings.length && !spaces.length) {
+    $('meetings').innerHTML = `<div class="listhead empty">
+      <b>Todavía nada</b>dale a nueva reunión arriba a la derecha</div>`;
+    return;
+  }
+
+  // Every declared space gets a group even when it is empty — that is the point
+  // of keeping a registry instead of deriving the list from the meetings.
+  const groups = new Map(spaces.map(name => [name, []]));
+  groups.set(UNASSIGNED, []);
+  for (const m of state.meetings) {
+    const key = m.space && groups.has(m.space) ? m.space : UNASSIGNED;
+    groups.get(key).push(m);
+  }
+
+  let html = '';
+  for (const [name, items] of groups) {
+    const unassigned = name === UNASSIGNED;
+    if (unassigned && !items.length) continue;
+    const shut = collapsed.has(name);
+    html += `<div class="spacehead" data-space="${esc(name)}">
+        <div class="caret">${shut ? '▶' : '▼'}</div>
+        <div class="name">${unassigned ? 'sin asignar' : esc(name)}</div>
+        <div class="n">${items.length}</div>
+        ${unassigned ? '' : `<div class="edit" data-editspace="${esc(name)}">···</div>`}
+      </div>`;
+    if (!shut) {
+      html += items.map(m => meetingRow(m, busyOn)).join('')
+        || `<div class="meeting empty" style="cursor:default">vacío</div>`;
+    }
+  }
+  $('meetings').innerHTML = html;
+
+  document.querySelectorAll('.meeting[data-name]').forEach(el => {
+    el.onclick = () => select(el.dataset.name);
+  });
+  document.querySelectorAll('.spacehead').forEach(el => {
+    el.onclick = (event) => {
+      if (event.target.dataset.editspace) return;
+      const key = el.dataset.space;
+      collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
+      localStorage.setItem('hcw-collapsed', JSON.stringify([...collapsed]));
+      renderMeetings();
+    };
+  });
+  document.querySelectorAll('[data-editspace]').forEach(el => {
+    el.onclick = (event) => { event.stopPropagation(); editSpace(el.dataset.editspace); };
+  });
+}
+
+$('addspace').onclick = async () => {
+  const name = await promptDialog('Nuevo espacio', 'Nombre del espacio', '');
+  if (!name) return;
+  try {
+    await post('/api/spaces', { action: 'create', name });
+    await refresh();
+  } catch (e) { toast(e.message, 'bad'); }
+};
+
+async function editSpace(name) {
+  const next = await promptDialog(
+    'Espacio', 'Nombre del espacio. Vacío para borrarlo — las reuniones no se borran, '
+    + 'se quedan sin asignar.', name);
+  if (next === null) return;
+  try {
+    if (!next.trim()) {
+      const result = await post('/api/spaces', { action: 'delete', name });
+      toast(`espacio borrado · ${result.freed} reuniones sin asignar`);
+    } else if (next.trim() !== name) {
+      const result = await post('/api/spaces', { action: 'rename', from: name, to: next.trim() });
+      toast(`renombrado · ${result.moved} reuniones movidas`, 'good');
+    }
+    await refresh();
+    if (selected) await select(selected);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+function promptDialog(title, message, value) {
+  return new Promise(resolve => {
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim';
+    scrim.innerHTML = `<div class="modal">
+      <div class="eyebrow">espacios</div><h3>${esc(title)}</h3>
+      <p>${esc(message)}</p>
+      <div class="field"><input type="text" id="promptvalue" value="${esc(value)}"></div>
+      <div class="row"><button class="ghost" data-no>cancelar</button>
+      <button data-yes>guardar</button></div></div>`;
+    const close = (v) => { scrim.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = (e) => {
+      if (e.key === 'Escape') close(null);
+      if (e.key === 'Enter') close(scrim.querySelector('#promptvalue').value);
+    };
+    scrim.querySelector('[data-no]').onclick = () => close(null);
+    scrim.querySelector('[data-yes]').onclick = () => close(scrim.querySelector('#promptvalue').value);
+    scrim.onclick = (e) => { if (e.target === scrim) close(null); };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(scrim);
+    const input = scrim.querySelector('#promptvalue');
+    input.focus(); input.select();
+  });
 }
 
 async function select(name, options = {}) {
@@ -684,7 +867,14 @@ function renderDetail() {
       ${meta.language ? `<span>${esc(meta.language)}</span>` : ''}
     </div>`;
 
+  const spaces = state.spaces || [];
   html += `<div class="actions">
+    <select id="spacesel" title="Espacio al que pertenece esta reunión">
+      <option value=""${detail.space ? '' : ' selected'}>sin asignar</option>
+      ${spaces.map(s => `<option value="${esc(s)}"${
+        s === detail.space ? ' selected' : ''}>${esc(s)}</option>`).join('')}
+      <option value="__new__">nuevo espacio…</option>
+    </select>
     ${detail.notes ? `<button class="ghost" data-act="reprocess">volver a procesar</button>` : ''}
     ${(detail.files||[]).includes('notes.html')
       ? `<button class="ghost" data-act="html"
@@ -695,6 +885,11 @@ peticiones a internet. Sirve para mandársela a alguien que no tiene la herramie
       ? `<button class="ghost" data-act="speakers"
            title="Poner nombre a cada voz que detectó la diarización"
          >nombres de las voces</button>` : ''}
+    ${(detail.meta || {}).calendar_summary
+      ? '' : (state.calendar?.configured && (state.calendar.events||[]).length
+        ? `<button class="ghost" data-act="link"
+             title="Asociar esta grabación a un evento del calendario para traer la lista de asistentes"
+           >vincular al calendario</button>` : '')}
     <button class="ghost" data-act="rename" title="Cambiar el título de la reunión">renombrar</button>
     <button class="ghost" data-act="reveal"
       title="Abre el explorador de Windows en la carpeta donde están el audio, las notas y el transcript de esta reunión"
@@ -757,16 +952,31 @@ peticiones a internet. Sirve para mandársela a alguien que no tiene la herramie
 
 function speakersEditor() {
   const mapping = detail.speaker_names || {};
+  const invitees = detail.invitees || [];
   return `<div class="speakers">
     <div class="eyebrow">nombres de los hablantes</div>
-    <div class="grid">${(detail.raw_speakers||[]).map(raw => `
-      <code>${esc(raw)}</code>
-      <input type="text" data-speaker="${esc(raw)}" value="${esc(mapping[raw] || '')}"
-             placeholder="${esc(raw)}">`).join('')}</div>
+    ${invitees.length ? `<p style="margin:8px 0 0;font-size:13px">Invitados según el
+      calendario: ${esc(invitees.join(' · '))}</p>` : ''}
+    <div class="grid">${(detail.raw_speakers||[]).map(raw => {
+      const p = speakerProposals[raw];
+      return `<code>${esc(raw)}</code>
+      <div>
+        <input type="text" data-speaker="${esc(raw)}" value="${esc(mapping[raw] || '')}"
+               placeholder="${esc(raw)}">
+        ${p ? `<div class="prop ${esc(p.confidence)}">${p.name
+          ? `propuesto: <b>${esc(p.name)}</b> · confianza ${esc(p.confidence)}${
+              p.evidence ? ` · <q>${esc(p.evidence)}</q>` : ''}`
+          : 'el transcript no dice cómo se llama'}</div>` : ''}
+      </div>`;
+    }).join('')}</div>
     <div class="row">
       <button data-act="save-speakers">guardar</button>
+      <button class="ghost" data-act="detect-speakers">detectar automáticamente</button>
       <button class="ghost" data-act="cancel-speakers">cancelar</button>
     </div>
+    <p style="margin:14px 0 0;font-size:13px;color:var(--color-text-tertiary)">
+      La detección lee el transcript buscando presentaciones y nombres al dirigirse a
+      alguien. Propone, no decide: revísalo antes de guardar.</p>
   </div>`;
 }
 
@@ -777,7 +987,76 @@ function paint(html) {
   document.querySelectorAll('.turn').forEach(el =>
     el.onclick = () => seekTo(parseFloat(el.dataset.start)));
   document.querySelectorAll('[data-act]').forEach(el => el.onclick = () => act(el.dataset.act, el));
+
+  const picker = $('spacesel');
+  if (picker) picker.onchange = async () => {
+    let space = picker.value;
+    if (space === '__new__') {
+      space = (await promptDialog('Nuevo espacio', 'Nombre del espacio', '') || '').trim();
+      if (!space) { renderDetail(); return; }
+    }
+    try {
+      await post('/api/space', { meeting: selected, space });
+      detail.space = space;
+      await refresh();
+      renderDetail();
+      toast(space ? `movida a ${space}` : 'sin asignar', 'good');
+    } catch (e) { toast(e.message, 'bad'); renderDetail(); }
+  };
+
   if (nowTurn >= 0) markNow(nowTurn, false);
+}
+
+// ── calendar ──────────────────────────────────────────────────
+function calendarPicker(events, { onPick, title, message }) {
+  return new Promise(resolve => {
+    let chosen = null;
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim';
+    scrim.innerHTML = `<div class="modal">
+      <div class="eyebrow">calendario</div><h3>${esc(title)}</h3>
+      <p>${esc(message)}</p>
+      <div class="cal">${events.map((e, i) => `
+        <div class="calrow" data-i="${i}">
+          <div class="when">${esc(e.start.slice(11,16))}–${esc(e.end.slice(11,16))} · ${
+            esc(e.start.slice(0,10))}</div>
+          <div class="what">${esc(e.summary)}</div>
+          ${e.people?.length ? `<span class="who when">${esc(e.people.join(' · '))}</span>` : ''}
+        </div>`).join('')}</div>
+      <div class="row" style="margin-top:16px">
+        <button class="ghost" data-no>cancelar</button>
+        <button data-yes disabled>usar este evento</button>
+      </div></div>`;
+    const close = (v) => { scrim.remove(); resolve(v); };
+    scrim.querySelectorAll('.calrow').forEach(row => {
+      row.onclick = () => {
+        scrim.querySelectorAll('.calrow').forEach(r => r.classList.remove('on'));
+        row.classList.add('on');
+        chosen = events[Number(row.dataset.i)];
+        scrim.querySelector('[data-yes]').disabled = false;
+      };
+    });
+    scrim.querySelector('[data-no]').onclick = () => close(null);
+    scrim.querySelector('[data-yes]').onclick = () => { close(chosen); onPick?.(chosen); };
+    scrim.onclick = (e) => { if (e.target === scrim) close(null); };
+    document.body.appendChild(scrim);
+  });
+}
+
+async function linkToCalendar() {
+  const events = state.calendar?.events || [];
+  if (!events.length) { toast('no hay eventos cerca en el calendario'); return; }
+  const chosen = await calendarPicker(events, {
+    title: 'Vincular al calendario',
+    message: 'Trae el título y la lista de asistentes, que es lo que permite acertar con los '
+      + 'nombres de las voces.',
+  });
+  if (!chosen) return;
+  try {
+    detail = await post('/api/calendar/attach', { meeting: selected, uid: chosen.uid });
+    renderDetail();
+    toast(`vinculada · ${detail.invitees.length} invitados`, 'good');
+  } catch (e) { toast(e.message, 'bad'); }
 }
 
 async function act(what, element) {
@@ -793,7 +1072,25 @@ async function act(what, element) {
     } else if (what === 'speakers') {
       editingSpeakers = !editingSpeakers; renderDetail();
     } else if (what === 'cancel-speakers') {
-      editingSpeakers = false; renderDetail();
+      editingSpeakers = false; speakerProposals = {}; renderDetail();
+    } else if (what === 'detect-speakers') {
+      element.disabled = true;
+      element.textContent = 'leyendo el transcript…';
+      const result = await post('/api/speakers/detect', { meeting: selected });
+      speakerProposals = {};
+      for (const p of result.proposals) speakerProposals[p.label] = p;
+      renderDetail();
+      // Pre-fill only the names that are not already set, so a detection run
+      // cannot quietly overwrite something a person typed.
+      let filled = 0;
+      document.querySelectorAll('[data-speaker]').forEach(input => {
+        const p = speakerProposals[input.dataset.speaker];
+        if (p && p.name && !input.value.trim()) { input.value = p.name; filled++; }
+      });
+      toast(filled ? `${filled} nombres propuestos — revísalos y guarda`
+                   : 'el transcript no dice cómo se llaman');
+    } else if (what === 'link') {
+      await linkToCalendar();
     } else if (what === 'save-speakers') {
       const names = {};
       document.querySelectorAll('[data-speaker]').forEach(input => {

@@ -28,6 +28,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import ical
+
+from helmcode_whisper.api import HelmcodeClient
 from helmcode_whisper.capture import (
     find_mic_device,
     find_system_device,
@@ -37,7 +40,9 @@ from helmcode_whisper.capture import (
 from helmcode_whisper.config import load_config
 from helmcode_whisper.pipeline.index import connect as index_connect
 from helmcode_whisper.pipeline.index import delete_meeting as index_delete
+from helmcode_whisper.pipeline.model import Transcript
 from helmcode_whisper.pipeline.search import search_hits
+from helmcode_whisper.pipeline.speakers import propose_names
 from helmcode_whisper.store import Meeting
 
 HERE = Path(__file__).parent
@@ -202,6 +207,70 @@ def devices_snapshot() -> dict:
     return snapshot
 
 
+# ── spaces ───────────────────────────────────────────────────────
+#
+# A space is a label, not a directory. The meetings stay exactly where the tool
+# put them, one folder each, and the grouping lives in `meta.json`. Moving them
+# on disk would mean the paths recorded in the search index go stale on every
+# reorganisation — so a rename that should be one word becomes a migration.
+#
+# The registry file exists so a space can be empty and so the order is the one
+# the user chose rather than alphabetical accident.
+
+SPACES_FILE = "spaces.json"
+UNASSIGNED = "Sin asignar"
+
+
+def spaces_path() -> Path:
+    return CONFIG.home / SPACES_FILE
+
+
+def load_spaces() -> list[str]:
+    path = spaces_path()
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return []
+    return [str(name) for name in data.get("spaces", []) if str(name).strip()]
+
+
+def save_spaces(names: list[str]) -> list[str]:
+    ordered: list[str] = []
+    for name in names:
+        clean = str(name).strip()
+        if clean and clean != UNASSIGNED and clean not in ordered:
+            ordered.append(clean)
+    CONFIG.home.mkdir(parents=True, exist_ok=True)
+    spaces_path().write_text(
+        json.dumps({"spaces": ordered}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return ordered
+
+
+def rename_space(old: str, new: str) -> int:
+    """Retitle a space and move every meeting in it. Returns how many moved."""
+    moved = 0
+    for meeting in Meeting.all(CONFIG.home):
+        if (meeting.load_meta().get("space") or "") == old:
+            meeting.save_meta({"space": new})
+            moved += 1
+    save_spaces([new if name == old else name for name in load_spaces()])
+    return moved
+
+
+def drop_space(name: str) -> int:
+    """Delete a space. The meetings survive it and fall back to unassigned."""
+    freed = 0
+    for meeting in Meeting.all(CONFIG.home):
+        if (meeting.load_meta().get("space") or "") == name:
+            meeting.save_meta({"space": ""})
+            freed += 1
+    save_spaces([item for item in load_spaces() if item != name])
+    return freed
+
+
 # ── meetings, safely ─────────────────────────────────────────────
 
 
@@ -230,6 +299,7 @@ def list_meetings() -> list[dict]:
                 "seconds": meta.get("duration_seconds") or 0,
                 "processed": meeting.notes_md.is_file(),
                 "speakers": speaker_names(meta, meta.get("speakers") or []),
+                "space": meta.get("space") or "",
             }
         )
     return meetings
@@ -293,9 +363,14 @@ def meeting_detail(name: str) -> dict:
     return {
         "name": meeting.path.name,
         "meta": meta,
+        "space": meta.get("space") or "",
         "notes": notes,
         "transcript": transcript,
         "speaker_names": mapping,
+        # People from the calendar invitation, when the recording was matched to
+        # one. This is what turns naming a voice from an open question into
+        # picking from a list.
+        "invitees": meta.get("invitees") or [],
         # The labels as the pipeline produced them, which is what a rename form
         # has to edit — the display names are the output, not the key.
         "raw_speakers": detected or (meta.get("speakers") or []),
@@ -383,6 +458,67 @@ def warm_playback(name: str) -> None:
             pass  # the audio endpoint will report it properly if asked
 
     threading.Thread(target=work, name=f"playback-{name}", daemon=True).start()
+
+
+# ── calendar ─────────────────────────────────────────────────────
+#
+# Deliberately here and not in the helmcode-whisper package. An iCal URL is a
+# request to somebody else's server — for Google's "secret address in iCal
+# format", to Google — and the package promises that meeting content only ever
+# reaches HELMCODE_BASE_URL, with a test that reads every module to enforce it.
+# The calendar is convenience; that promise is the point of the project.
+
+ICS_SOURCE = os.environ.get("HCW_ICS") or ""
+_calendar_cache: tuple[float, list] = (0.0, [])
+
+
+def calendar_events(*, force: bool = False) -> list:
+    """Events near now, cached for a minute so polling does not hammer anyone."""
+    global _calendar_cache
+    if not ICS_SOURCE:
+        return []
+    cached_at, cached = _calendar_cache
+    now = time.monotonic()
+    if cached and not force and now - cached_at < 60.0:
+        return cached
+    events = ical.around(ICS_SOURCE, datetime.now(), hours=14)
+    _calendar_cache = (now, events)
+    return events
+
+
+def calendar_state() -> dict:
+    if not ICS_SOURCE:
+        return {"configured": False}
+    try:
+        events = calendar_events()
+    except Exception as exc:
+        return {"configured": True, "error": f"{type(exc).__name__}: {exc}"}
+    now = datetime.now()
+    happening = ical.current(events, now)
+    return {
+        "configured": True,
+        "now": happening.to_dict() if happening else None,
+        "events": [
+            event.to_dict()
+            for event in sorted(events, key=lambda item: item.start)
+            if not event.all_day and abs((event.start - now).total_seconds()) <= 12 * 3600
+        ][:12],
+    }
+
+
+def attach_calendar(meeting: Meeting, uid: str) -> dict:
+    """Record which calendar event a meeting was, and who was invited to it."""
+    match = next((event for event in calendar_events() if event.uid == uid), None)
+    if match is None:
+        raise FileNotFoundError(uid)
+    meeting.save_meta(
+        {
+            "calendar_uid": match.uid,
+            "calendar_summary": match.summary,
+            "invitees": match.people,
+        }
+    )
+    return meeting_detail(meeting.path.name)
 
 
 # ── http ─────────────────────────────────────────────────────────
@@ -507,6 +643,8 @@ class Handler(BaseHTTPRequestHandler):
                             "processing": processing.status() if processing else None,
                             "meetings": list_meetings(),
                             "devices": devices_snapshot(),
+                            "spaces": load_spaces(),
+                            "calendar": calendar_state(),
                             "home": str(CONFIG.home),
                             "has_key": bool(CONFIG.api_key),
                         }
@@ -618,6 +756,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._send({"ok": True})
             elif route.path == "/api/delete":
                 self._send(delete_meeting(payload["meeting"]))
+            elif route.path == "/api/space":
+                meeting = resolve(payload["meeting"])
+                space = str(payload.get("space") or "").strip()
+                if space and space not in load_spaces():
+                    save_spaces([*load_spaces(), space])
+                meeting.save_meta({"space": space})
+                self._send({"ok": True, "spaces": load_spaces()})
+            elif route.path == "/api/spaces":
+                action = payload.get("action")
+                if action == "create":
+                    self._send({"spaces": save_spaces([*load_spaces(), payload["name"]])})
+                elif action == "rename":
+                    moved = rename_space(payload["from"], str(payload["to"]).strip())
+                    self._send({"spaces": load_spaces(), "moved": moved})
+                elif action == "delete":
+                    freed = drop_space(payload["name"])
+                    self._send({"spaces": load_spaces(), "freed": freed})
+                elif action == "reorder":
+                    self._send({"spaces": save_spaces(payload.get("names") or [])})
+                else:
+                    self._send({"error": "acción desconocida"}, 400)
+            elif route.path == "/api/calendar/attach":
+                self._send(attach_calendar(resolve(payload["meeting"]), payload["uid"]))
+            elif route.path == "/api/speakers/detect":
+                self._send(detect_speakers(resolve(payload["meeting"])))
             elif route.path == "/api/reveal":
                 meeting = resolve(payload["meeting"])
                 os.startfile(meeting.path)  # noqa: S606 — a local tool, by design
@@ -628,6 +791,41 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"error": "not found"}, 404)
         except Exception as exc:
             self._send({"error": f"{type(exc).__name__}: {exc}"}, 500)
+
+
+def detect_speakers(meeting: Meeting) -> dict:
+    """Ask the model who each label is. Proposes only — nothing is renamed here.
+
+    The invitee list from the calendar, when there is one, is passed as a
+    constraint rather than a hint: a name that is not on it gets discarded
+    upstream, because an invented name arrives looking exactly like a real one.
+    """
+    if not meeting.transcript_json.is_file():
+        raise RuntimeError("todavía no hay transcripción: procesa la reunión primero")
+    CONFIG.require_api_key()
+
+    transcript = Transcript.from_dict(
+        json.loads(meeting.transcript_json.read_text(encoding="utf-8"))
+    )
+    invitees = meeting.load_meta().get("invitees") or []
+
+    with HelmcodeClient(CONFIG) as client:
+        proposals = propose_names(
+            client, transcript, model=CONFIG.notes_model, candidates=invitees or None
+        )
+
+    return {
+        "proposals": [
+            {
+                "label": p.label,
+                "name": p.name,
+                "confidence": p.confidence,
+                "evidence": p.evidence,
+            }
+            for p in proposals
+        ],
+        "invitees": invitees,
+    }
 
 
 def delete_meeting(name: str) -> dict:
