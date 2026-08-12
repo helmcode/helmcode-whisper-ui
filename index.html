@@ -188,6 +188,16 @@ blockquote .who { display: block; margin: var(--space-2) 0 0; text-transform: up
 .empty { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: var(--text-mono); }
 .warn { color: var(--color-terminal-red); font-family: var(--font-mono); font-size: var(--text-mono); margin-bottom: var(--space-4); }
 
+.devwarn {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); color: var(--color-terminal-red);
+  white-space: nowrap;
+}
+
+/* The turn a search hit landed on, so the eye finds it after the scroll. */
+.turn.at { background: var(--color-accent-dim); box-shadow: -3px 0 0 var(--color-accent); }
+pre.log.failed { border-left-color: var(--color-terminal-red); }
+
 pre.log {
   font-family: var(--font-mono); font-size: 11px; line-height: 1.6;
   background: var(--color-surface); border: 0.5px solid var(--color-border);
@@ -211,6 +221,7 @@ pre.log {
       <div id="meters"></div>
     </div>
   </div>
+  <div id="devwarn" class="devwarn" style="display:none"></div>
   <input type="text" id="search" placeholder="buscar en todo el histórico…">
 </header>
 
@@ -229,6 +240,7 @@ let selected = null;
 let tab = 'notes';
 let detail = null;
 let searching = false;
+let highlightAt = null;
 
 const hms = (s) => {
   s = Math.floor(s || 0);
@@ -248,11 +260,30 @@ async function api(path, options) {
 }
 
 // ── polling ───────────────────────────────────────────────
+let wasProcessing = null;
+
 async function refresh() {
   try { state = await api('/api/state'); } catch (e) { return; }
   renderHeader();
   renderMeetings();
-  if (state.processing && !state.processing.done && !searching) renderDetail();
+
+  const now = state.processing;
+  // The moment processing finishes, the notes exist on disk but `detail` still
+  // holds the copy fetched before the run — the one with no notes in it. The
+  // old code stopped calling renderDetail() exactly then, so the pane sat on
+  // "procesando…" until you clicked another meeting and came back. Refetch on
+  // the transition instead.
+  const justFinished = now && now.done
+    && wasProcessing && !wasProcessing.done
+    && wasProcessing.meeting === now.meeting;
+  wasProcessing = now ? { meeting: now.meeting, done: now.done } : null;
+
+  if (searching) return;
+  if (justFinished && now.meeting === selected) {
+    await select(now.meeting);
+  } else if (now && !now.done) {
+    renderDetail();
+  }
 }
 
 function schedule() {
@@ -267,6 +298,18 @@ function renderHeader() {
   $('title').style.display = live ? 'none' : 'block';
   $('rec').textContent = live ? '■ parar' : '● grabar';
   $('rec').className = live ? 'stop' : '';
+
+  // Said before the recording, not after it. A missing loopback means the
+  // meeting is captured with the microphone only, and by the time anyone
+  // notices, the meeting has happened.
+  const devices = state.devices || {};
+  const problem = !devices.mic
+    ? 'sin micrófono — la grabación no va a funcionar'
+    : (!devices.system && !live ? 'sin audio de sistema — solo se grabará tu micrófono' : '');
+  $('devwarn').textContent = problem;
+  $('devwarn').style.display = problem ? 'block' : 'none';
+  $('rec').disabled = !devices.mic && !live;
+
   if (!live) return;
   $('elapsed').textContent = hms(live.elapsed);
   $('meters').innerHTML = live.tracks.map(t => `
@@ -311,14 +354,26 @@ function renderMeetings() {
   });
 }
 
-async function select(name) {
+async function select(name, options = {}) {
   searching = false;
   $('search').value = '';
   selected = name;
-  tab = 'notes';
-  detail = await api('/api/meeting?name=' + encodeURIComponent(name));
+  tab = options.tab || 'notes';
+  highlightAt = options.at ?? null;
+  try {
+    detail = await api('/api/meeting?name=' + encodeURIComponent(name));
+  } catch (e) {
+    detail = null;
+    $('pane').innerHTML = `<div class="warn">${esc(e.message)}</div>`;
+    return;
+  }
   renderMeetings();
   renderDetail();
+
+  if (highlightAt !== null) {
+    const turn = document.querySelector('.turn.at');
+    if (turn) turn.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
 }
 
 // ── detail ────────────────────────────────────────────────
@@ -332,14 +387,19 @@ function renderDetail() {
     <div class="meta-line">${esc((meta.started_at || '').replace('T',' ').slice(0,16))} · ${Math.round((meta.duration_seconds||0)/60)} min${
       (meta.speakers||[]).length ? ' · ' + esc(meta.speakers.join(', ')) : ''}</div>`;
 
-  if (running || (state.processing && state.processing.meeting === selected)) {
-    html += `<pre class="log">${esc((state.processing.lines||[]).join('\n'))}</pre>`;
+  if (state.processing && state.processing.meeting === selected) {
+    if (state.processing.failed) {
+      html += `<div class="warn">el procesado falló — el detalle está al final del log</div>`;
+    }
+    html += `<pre class="log${state.processing.failed ? ' failed' : ''}">${
+      esc((state.processing.lines||[]).join('\n'))}</pre>`;
   }
 
   if (!detail.notes) {
     html += running
       ? '<div class="empty">procesando…</div>'
-      : `<button id="go">procesar ahora</button>
+      : `<button id="go">${state.processing?.failed && state.processing.meeting === selected
+           ? 'volver a intentarlo' : 'procesar ahora'}</button>
          <p class="empty" style="margin-top:16px">transcribe, separa hablantes y escribe las notas</p>`;
     $('pane').innerHTML = html;
     const go = $('go');
@@ -372,8 +432,16 @@ function renderDetail() {
       `<blockquote>${esc(q.text)}<span class="who">${esc(q.speaker||'—')}</span></blockquote>`).join('')}`;
     html += `<hr><button class="ghost" id="reprocess">volver a procesar</button>`;
   } else {
-    html += (detail.transcript||[]).map(t => `
-      <div class="turn ${t.speaker==='Me'?'me':''}">
+    // The turn a search hit points at. Passages group several turns, so the
+    // hit's timestamp is the start of the passage; the turn that contains it
+    // is the last one that began at or before it.
+    const turns = detail.transcript || [];
+    let mark = -1;
+    if (highlightAt !== null) {
+      turns.forEach((t, index) => { if (t.start <= highlightAt + 0.01) mark = index; });
+    }
+    html += turns.map((t, index) => `
+      <div class="turn ${t.speaker==='Me'?'me':''} ${index===mark?'at':''}">
         <div class="t">${mmss(t.start)}</div>
         <div><div class="s">${esc(t.speaker)}</div><p>${esc(t.text)}</p></div>
       </div>`).join('') || '<div class="empty">sin transcripción</div>';
@@ -411,11 +479,20 @@ async function runSearch(term) {
     let html = `<div class="eyebrow">resultados</div><h1>${esc(term)}</h1>`;
     if (!result.semantic) html += '<div class="warn">solo búsqueda por palabras — sin embeddings disponibles</div>';
     html += result.hits.length ? result.hits.map(h => `
-      <div class="hit">
+      <div class="hit" data-meeting="${esc(h.meeting_id)}" data-start="${h.start}">
         <div class="hit-head"><b>${esc(h.meeting)}</b> · ${esc(h.date)} · ${mmss(h.start)} · <span class="sp">${esc(h.speaker)}</span></div>
         <div class="hit-text">${esc(h.text)}</div>
       </div>`).join('') : '<div class="empty">nada encontrado</div>';
     $('pane').innerHTML = html;
+    // The hits were styled as clickable from the start — pointer cursor, hover
+    // state — and did nothing. Finding the moment is the whole point of the
+    // search, so clicking one opens its meeting at that turn.
+    document.querySelectorAll('.hit').forEach(el => {
+      el.onclick = () => select(el.dataset.meeting, {
+        tab: 'transcript',
+        at: parseFloat(el.dataset.start),
+      });
+    });
   } catch (e) {
     $('pane').innerHTML = `<div class="warn">${esc(e.message)}</div>`;
   }

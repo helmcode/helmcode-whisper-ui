@@ -149,6 +149,40 @@ recording: Recording | None = None
 processing: Processing | None = None
 
 
+# ── devices ──────────────────────────────────────────────────────
+
+_devices_cache: tuple[float, dict] = (0.0, {})
+
+
+def devices_snapshot() -> dict:
+    """Which inputs are available, cached briefly.
+
+    The UI needs this *before* anyone presses record: a missing loopback means
+    the meeting is captured with the microphone only, and finding that out
+    afterwards costs the recording. Enumerating PortAudio is not free and the
+    UI polls, hence the short cache — short enough that plugging in a headset
+    shows up within a few seconds.
+    """
+    global _devices_cache
+    cached_at, cached = _devices_cache
+    now = time.monotonic()
+    if cached and now - cached_at < 5.0:
+        return cached
+
+    try:
+        mic = find_mic_device()
+        system = find_system_device()
+        snapshot = {
+            "mic": mic.name if mic else None,
+            "system": system.name if system else None,
+        }
+    except Exception as exc:  # never take the UI down over device enumeration
+        snapshot = {"mic": None, "system": None, "error": f"{type(exc).__name__}: {exc}"}
+
+    _devices_cache = (now, snapshot)
+    return snapshot
+
+
 # ── data ─────────────────────────────────────────────────────────
 
 
@@ -241,6 +275,7 @@ class Handler(BaseHTTPRequestHandler):
                             "recording": recording.status() if recording else None,
                             "processing": processing.status() if processing else None,
                             "meetings": list_meetings(),
+                            "devices": devices_snapshot(),
                             "home": str(CONFIG.home),
                         }
                     )
@@ -257,6 +292,7 @@ class Handler(BaseHTTPRequestHandler):
                         "semantic": semantic,
                         "hits": [
                             {
+                                "meeting_id": hit.meeting_id,
                                 "meeting": hit.meeting_title,
                                 "date": hit.meeting_date,
                                 "start": hit.start,
