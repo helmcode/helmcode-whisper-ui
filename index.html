@@ -261,6 +261,41 @@ select {
 }
 select:hover { border-color: var(--color-border-hover); }
 
+/* ── editing the notes ─────────────────────────────────────── */
+textarea {
+  width: 100%; background: var(--color-surface-input); color: var(--color-text-primary);
+  border: 0.5px solid var(--color-border); font-family: var(--font-sans); font-size: 15px;
+  line-height: var(--leading-body); padding: var(--space-3); outline: none; resize: vertical;
+}
+textarea:hover { border-color: var(--color-border-hover); }
+textarea:focus { border-color: var(--color-border-focus); background: var(--color-surface-input-focus); }
+.hint {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); color: var(--color-text-placeholder);
+  margin: 4px 0 0;
+}
+.itemrow { display: grid; grid-template-columns: 1fr 150px 120px 30px; gap: var(--space-2); margin-bottom: var(--space-2); }
+.quoterow { display: grid; grid-template-columns: 1fr 170px 30px; gap: var(--space-2); margin-bottom: var(--space-2); }
+.drop {
+  background: transparent; border: 0.5px solid var(--color-border); border-left: 0.5px solid var(--color-border);
+  color: var(--color-text-placeholder); padding: 0; font-size: 14px; line-height: 1;
+}
+.drop:hover:not(:disabled) { color: var(--color-terminal-red); background: rgba(255,95,86,0.08); border-color: rgba(255,95,86,0.35); }
+.editbar { display: flex; gap: var(--space-2); align-items: center; margin: var(--space-6) 0 0; }
+.editbar .spacer { flex: 1 1 auto; }
+.edited {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); color: var(--color-text-placeholder);
+}
+
+/* a speaker name in the transcript, clickable like the title */
+.turn .s.namable { cursor: text; }
+.turn .s.namable:hover { text-decoration: underline dotted; }
+.turn .s input {
+  font-family: var(--font-mono); font-size: var(--text-mono); padding: 2px 5px;
+  width: 150px; text-transform: none; letter-spacing: normal;
+}
+
 /* speaker proposals */
 .prop { font-family: var(--font-mono); font-size: var(--text-mono-sm); line-height: 1.5; margin-top: 3px; }
 .prop.high { color: var(--color-terminal-green); }
@@ -498,6 +533,7 @@ let state = { recording: null, processing: null, meetings: [], devices: {}, home
 let selected = null, detail = null, tab = 'notes', searching = false;
 let highlightAt = null, editingSpeakers = false, nowTurn = -1, following = true;
 let speakerProposals = {};
+let editingNotes = false;
 
 const audio = $('audio');
 
@@ -949,15 +985,7 @@ peticiones a internet. Sirve para mandársela a alguien que no tiene la herramie
     </div>`;
 
   if (tab === 'notes') {
-    html += `<h2>Resumen</h2><p>${esc(n.summary)}</p>`;
-    if (n.decisions?.length) html += `<h2>Decisiones</h2><ul>${n.decisions.map(d=>`<li>${esc(d)}</li>`).join('')}</ul>`;
-    if (n.action_items?.length) html += `<h2>Action items</h2><ul>${n.action_items.map(a=>{
-      const who = [a.owner, a.due].filter(Boolean).join(' · ');
-      return `<li class="task">${esc(a.task)}${who?`<span class="who">${esc(who)}</span>`:''}</li>`;
-    }).join('')}</ul>`;
-    if (n.open_questions?.length) html += `<h2>Preguntas abiertas</h2><ul>${n.open_questions.map(q=>`<li>${esc(q)}</li>`).join('')}</ul>`;
-    if (n.quotes?.length) html += `<h2>Citas</h2>${n.quotes.map(q=>
-      `<blockquote>${esc(q.text)}<span class="who">${esc(q.speaker||'—')}</span></blockquote>`).join('')}`;
+    html += editingNotes ? notesEditor(n) : notesView(n);
   } else {
     const turns = detail.transcript || [];
     let mark = -1;
@@ -969,10 +997,120 @@ peticiones a internet. Sirve para mandársela a alguien que no tiene la herramie
     html += turns.map((t, index) => `
       <div class="turn ${index===mark?'at':''}" data-turn="${index}" data-start="${t.start}">
         <div class="t">${mmss(t.start)}</div>
-        <div><div class="s" style="--sp:${speakerColor(t.speaker)}">${esc(t.speaker)}</div><p>${esc(t.text)}</p></div>
+        <div><div class="s${t.raw_speaker ? ' namable' : ''}" data-raw="${esc(t.raw_speaker || '')}"
+          title="Clic para ponerle nombre a esta voz"
+          style="--sp:${speakerColor(t.speaker)}">${esc(t.speaker)}</div><p>${esc(t.text)}</p></div>
       </div>`).join('') || '<div class="empty">sin transcripción</div>';
   }
   paint(html);
+}
+
+// ── notes: reading and correcting ─────────────────────────
+function notesView(n) {
+  let html = `<h2>Resumen</h2><p>${esc(n.summary)}</p>`;
+  if (n.decisions?.length) html += `<h2>Decisiones</h2><ul>${
+    n.decisions.map(d => `<li>${esc(d)}</li>`).join('')}</ul>`;
+  if (n.action_items?.length) html += `<h2>Action items</h2><ul>${n.action_items.map(a => {
+    const who = [a.owner, a.due].filter(Boolean).join(' · ');
+    return `<li class="task">${esc(a.task)}${who ? `<span class="who">${esc(who)}</span>` : ''}</li>`;
+  }).join('')}</ul>`;
+  if (n.open_questions?.length) html += `<h2>Preguntas abiertas</h2><ul>${
+    n.open_questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>`;
+  if (n.quotes?.length) html += `<h2>Citas</h2>${n.quotes.map(q =>
+    `<blockquote>${esc(q.text)}<span class="who">${esc(q.speaker || '—')}</span></blockquote>`
+  ).join('')}`;
+
+  html += `<div class="editbar">
+    <button class="ghost" data-act="edit-notes">corregir</button>
+    <button class="ghost" data-act="copy-notes">copiar como markdown</button>
+    <div class="spacer"></div>
+    ${detail.notes_edited ? '<div class="edited">corregidas a mano</div>' : ''}
+  </div>`;
+  return html;
+}
+
+// The string lists are one-per-line textareas rather than a widget per item.
+// Editing five bullet points should feel like editing text, not like filling in
+// a form, and the model's phrasing is usually almost right — what you want is to
+// fix a word, not to manage rows.
+function notesEditor(n) {
+  const lines = (list) => (list || []).join('\n');
+  return `
+    <h2>Resumen</h2>
+    <textarea id="n-summary" rows="6">${esc(n.summary)}</textarea>
+
+    <h2>Decisiones</h2>
+    <textarea id="n-decisions" rows="4">${esc(lines(n.decisions))}</textarea>
+    <p class="hint">una por línea</p>
+
+    <h2>Action items</h2>
+    <div id="n-actions">${(n.action_items || []).map(a => actionRow(a)).join('')}</div>
+    <button class="ghost" data-act="add-action" style="margin-top:8px">+ action item</button>
+
+    <h2>Preguntas abiertas</h2>
+    <textarea id="n-questions" rows="3">${esc(lines(n.open_questions))}</textarea>
+    <p class="hint">una por línea</p>
+
+    <h2>Citas</h2>
+    <div id="n-quotes">${(n.quotes || []).map(q => quoteRow(q)).join('')}</div>
+    <button class="ghost" data-act="add-quote" style="margin-top:8px">+ cita</button>
+
+    <div class="editbar">
+      <button data-act="save-notes">guardar</button>
+      <button class="ghost" data-act="cancel-notes">cancelar</button>
+      <div class="spacer"></div>
+      <div class="edited">reescribe notes.json, notes.md y notes.html</div>
+    </div>`;
+}
+
+const actionRow = (a = {}) => `<div class="itemrow">
+    <input type="text" data-field="task" value="${esc(a.task || '')}" placeholder="qué hay que hacer">
+    <input type="text" data-field="owner" value="${esc(a.owner || '')}" placeholder="quién">
+    <input type="text" data-field="due" value="${esc(a.due || '')}" placeholder="cuándo">
+    <button class="drop" data-act="drop-row" title="quitar">×</button>
+  </div>`;
+
+const quoteRow = (q = {}) => `<div class="quoterow">
+    <input type="text" data-field="text" value="${esc(q.text || '')}" placeholder="la cita">
+    <input type="text" data-field="speaker" value="${esc(q.speaker || '')}" placeholder="quién lo dijo">
+    <button class="drop" data-act="drop-row" title="quitar">×</button>
+  </div>`;
+
+function collectNotes() {
+  const rows = (container, fields) => [...document.querySelectorAll(`#${container} > div`)].map(row => {
+    const out = {};
+    for (const field of fields) {
+      out[field] = row.querySelector(`[data-field="${field}"]`)?.value.trim() || '';
+    }
+    return out;
+  });
+  return {
+    summary: $('n-summary').value.trim(),
+    decisions: $('n-decisions').value.split('\n').map(s => s.trim()).filter(Boolean),
+    open_questions: $('n-questions').value.split('\n').map(s => s.trim()).filter(Boolean),
+    action_items: rows('n-actions', ['task', 'owner', 'due']).filter(a => a.task),
+    quotes: rows('n-quotes', ['text', 'speaker']).filter(q => q.text),
+  };
+}
+
+async function copyNotes() {
+  const response = await fetch('/api/file?name=' + encodeURIComponent(selected) + '&file=notes.md');
+  const markdown = await response.text();
+  try {
+    await navigator.clipboard.writeText(markdown);
+    toast('notas copiadas como markdown', 'good');
+  } catch {
+    // Clipboard access can be refused even on localhost. Falling back to a
+    // selected textarea beats telling someone their notes are uncopyable.
+    const box = document.createElement('textarea');
+    box.value = markdown;
+    Object.assign(box.style, { position: 'fixed', top: '-1000px' });
+    document.body.appendChild(box);
+    box.select();
+    const ok = document.execCommand?.('copy');
+    box.remove();
+    toast(ok ? 'notas copiadas como markdown' : 'no pude acceder al portapapeles', ok ? 'good' : 'bad');
+  }
 }
 
 // ── the processing wait ───────────────────────────────────
@@ -1065,13 +1203,22 @@ function speakersEditor() {
   </div>`;
 }
 
+// Called again after a row is added, because a fresh element has no handler.
+function wireRows() {
+  document.querySelectorAll('[data-act]').forEach(el => el.onclick = () => act(el.dataset.act, el));
+}
+
 function paint(html) {
   $('pane').innerHTML = html;
   document.querySelectorAll('.tab').forEach(el =>
     el.onclick = () => { tab = el.dataset.tab; renderDetail(); });
   document.querySelectorAll('.turn').forEach(el =>
     el.onclick = () => seekTo(parseFloat(el.dataset.start)));
-  document.querySelectorAll('[data-act]').forEach(el => el.onclick = () => act(el.dataset.act, el));
+  wireRows();
+
+  document.querySelectorAll('.s.namable').forEach(el => {
+    el.onclick = (event) => { event.stopPropagation(); startSpeakerRename(el); };
+  });
 
   const heading = $('h1');
   if (heading && heading.classList.contains('editable')) heading.onclick = startRename;
@@ -1099,6 +1246,16 @@ function paint(html) {
 async function act(what, element) {
   try {
     if (what === 'process' || what === 'reprocess') {
+      // Reprocessing restores the model's notes from the cache, which silently
+      // undoes anything corrected by hand. Say so before doing it.
+      if (detail?.notes_edited) {
+        const ok = await confirmDialog(
+          'Volver a procesar',
+          'Estas notas se corrigieron a mano. Al reprocesar se recupera la versión del '
+          + 'modelo y se pierden esas correcciones.',
+          'reprocesar');
+        if (!ok) return;
+      }
       element.disabled = true;
       await post('/api/process', { meeting: selected });
       await refresh();
@@ -1126,6 +1283,28 @@ async function act(what, element) {
                    : 'el transcript no dice cómo se llaman');
     } else if (what === 'toggle-log') {
       showLog = !showLog; renderDetail();
+    } else if (what === 'edit-notes') {
+      editingNotes = true; renderDetail();
+    } else if (what === 'cancel-notes') {
+      editingNotes = false; renderDetail();
+    } else if (what === 'copy-notes') {
+      await copyNotes();
+    } else if (what === 'add-action') {
+      $('n-actions').insertAdjacentHTML('beforeend', actionRow());
+      wireRows();
+      $('n-actions').lastElementChild.querySelector('input').focus();
+    } else if (what === 'add-quote') {
+      $('n-quotes').insertAdjacentHTML('beforeend', quoteRow());
+      wireRows();
+      $('n-quotes').lastElementChild.querySelector('input').focus();
+    } else if (what === 'drop-row') {
+      element.closest('div').remove();
+    } else if (what === 'save-notes') {
+      element.disabled = true;
+      detail = await post('/api/notes', { meeting: selected, notes: collectNotes() });
+      editingNotes = false;
+      renderDetail();
+      toast('notas guardadas · notes.md y notes.html reescritos', 'good');
     } else if (what === 'save-speakers') {
       const names = {};
       document.querySelectorAll('[data-speaker]').forEach(input => {
@@ -1149,6 +1328,39 @@ async function act(what, element) {
       toast('reunión borrada');
     }
   } catch (e) { toast(e.message, 'bad'); if (element) element.disabled = false; }
+}
+
+// Naming a voice from the transcript, where you are when you notice that
+// SPEAKER_02 is Ana. The same gesture as the title: click the thing, type.
+// It applies to every turn of that speaker, not just the one clicked.
+function startSpeakerRename(element) {
+  if (element.querySelector('input')) return;
+  const raw = element.dataset.raw;
+  const shown = (detail.speaker_names || {})[raw] || '';
+  element.innerHTML = `<input type="text" value="${esc(shown)}" placeholder="${esc(raw)}">`;
+  const input = element.querySelector('input');
+  input.focus();
+  input.select();
+
+  const commit = async () => {
+    input.onblur = null;
+    const name = input.value.trim();
+    if (name === shown) { renderDetail(); return; }
+    const names = { ...(detail.speaker_names || {}) };
+    if (name) names[raw] = name; else delete names[raw];
+    try {
+      detail = await post('/api/speakers', { meeting: selected, names });
+      renderDetail();
+      await refresh();
+      toast(name ? `${raw} es ${name}` : `${raw} sin nombre`, 'good');
+    } catch (e) { toast(e.message, 'bad'); renderDetail(); }
+  };
+  input.onblur = commit;
+  input.onkeydown = (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') commit();
+    if (event.key === 'Escape') { input.onblur = null; renderDetail(); }
+  };
 }
 
 function startRename() {

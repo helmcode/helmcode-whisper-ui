@@ -443,6 +443,7 @@ def meeting_detail(name: str) -> dict:
         "notes": notes,
         "transcript": transcript,
         "speaker_names": mapping,
+        "notes_edited": bool(meta.get("notes_edited_at")),
         # People from the calendar invitation, when the recording was matched to
         # one. This is what turns naming a voice from an open question into
         # picking from a list.
@@ -863,6 +864,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send({"error": "acción desconocida"}, 400)
             elif route.path == "/api/calendar/attach":
                 self._send(attach_calendar(resolve(payload["meeting"]), payload["uid"]))
+            elif route.path == "/api/notes":
+                self._send(save_notes(resolve(payload["meeting"]), payload.get("notes") or {}))
             elif route.path == "/api/speakers/detect":
                 self._send(detect_speakers(resolve(payload["meeting"])))
             else:
@@ -871,6 +874,66 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"error": "not found"}, 404)
         except Exception as exc:
             self._send({"error": f"{type(exc).__name__}: {exc}"}, 500)
+
+
+def save_notes(meeting: Meeting, incoming: dict) -> dict:
+    """Replace a meeting's notes with an edited version.
+
+    Notes you cannot correct are notes you do not fully trust, and we know the
+    model gets things wrong — a decision it invented, an action item pinned on
+    the wrong person. So the edit is real: it rewrites notes.json and re-renders
+    notes.md and notes.html from it, using the same renderers `process` uses, so
+    the shared file and the terminal output never disagree.
+
+    The model's original stays in `.cache/`. That means "volver a procesar"
+    without `--force` restores it, which is why the UI asks first.
+    """
+    from helmcode_whisper.pipeline.notes import render_markdown
+    from helmcode_whisper.ui.html import render_html
+
+    notes = {
+        "summary": str(incoming.get("summary") or "").strip(),
+        "decisions": _clean_list(incoming.get("decisions")),
+        "open_questions": _clean_list(incoming.get("open_questions")),
+        "action_items": [
+            {
+                "task": str(item.get("task") or "").strip(),
+                "owner": str(item.get("owner") or "").strip(),
+                "due": str(item.get("due") or "").strip(),
+            }
+            for item in (incoming.get("action_items") or [])
+            if isinstance(item, dict) and str(item.get("task") or "").strip()
+        ],
+        "quotes": [
+            {
+                "speaker": str(item.get("speaker") or "").strip(),
+                "text": str(item.get("text") or "").strip(),
+            }
+            for item in (incoming.get("quotes") or [])
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ],
+    }
+
+    meta = meeting.save_meta({"notes_edited_at": datetime.now().isoformat(timespec="seconds")})
+    meeting.notes_json.write_text(
+        json.dumps(notes, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    meeting.notes_md.write_text(render_markdown(notes, meta), encoding="utf-8")
+
+    transcript = Transcript()
+    if meeting.transcript_json.is_file():
+        transcript = Transcript.from_dict(
+            json.loads(meeting.transcript_json.read_text(encoding="utf-8"))
+        )
+    meeting.notes_html.write_text(render_html(notes, meta, transcript), encoding="utf-8")
+
+    return meeting_detail(meeting.path.name)
+
+
+def _clean_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        value = value.split("\n")
+    return [str(item).strip() for item in (value or []) if str(item).strip()]
 
 
 def detect_speakers(meeting: Meeting) -> dict:
@@ -908,8 +971,20 @@ def detect_speakers(meeting: Meeting) -> dict:
     }
 
 
+TRASH = ".trash"
+
+
 def delete_meeting(name: str) -> dict:
-    """Remove a meeting from disk and from the index, in that order of care."""
+    """Take a meeting out of the archive, reversibly.
+
+    It moves to `.trash/` rather than being deleted. An hour-long meeting is
+    around a gigabyte of audio that cannot be recovered, and the difference
+    between a mistake and a disaster is one `mv`. `.trash` holds no `meta.json`
+    of its own, so nothing in there is listed as a meeting.
+
+    The index rows go for real: search offering a sentence from something the
+    user deleted is worse than a folder taking up space.
+    """
     global processing
     meeting = resolve(name)
     with _lock:
@@ -926,11 +1001,18 @@ def delete_meeting(name: str) -> dict:
         finally:
             connection.close()
 
-    shutil.rmtree(meeting.path)
+    bin_dir = CONFIG.home / TRASH
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    target = bin_dir / name
+    if target.exists():
+        # Deleted, re-recorded under the same title, deleted again.
+        target = bin_dir / f"{name}-{datetime.now():%H%M%S}"
+    shutil.move(str(meeting.path), str(target))
+
     with _lock:
         if processing is not None and processing.meeting == name:
             processing = None
-    return {"ok": True, "passages_removed": removed}
+    return {"ok": True, "passages_removed": removed, "trash": str(target)}
 
 
 def main() -> None:
