@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>helmcode-whisper</title>
+<title>helmcode·whisper</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0a0a'/><rect x='7' y='12' width='3' height='8' fill='%234f39f6'/><rect x='13' y='7' width='3' height='18' fill='%23848fff'/><rect x='19' y='10' width='3' height='12' fill='%234f39f6'/><rect x='25' y='14' width='3' height='4' fill='%23848fff'/></svg>">
 <style>
 /* Tokens taken from helmcode.com src/styles/tokens.css. Same names, same order,
    so the two can be diffed by eye. Nothing here loads from the network. */
 :root {
   --color-bg: #0a0a0a;
-  --color-surface: #111111;
+  --color-surface: #0e0e0e;
   --color-surface-raised: #161616;
   --color-surface-input: #1a1a1a;
   --color-surface-input-focus: #1e1e1e;
@@ -26,7 +27,14 @@
   --color-accent-border: oklch(51.1% .262 276.966 / 0.35);
   --color-error: rgba(220,80,80,0.90);
   --color-terminal-red: #ff5f56;
+  --color-terminal-amber: #ffbd2e;
   --color-terminal-green: #27c93f;
+
+  /* Speaker accents. Muted on purpose: the transcript is for reading, and a
+     rainbow of saturated names fights the text it is labelling. */
+  --sp-0: #848fff; --sp-1: #5fc9a8; --sp-2: #d9a441;
+  --sp-3: #cf7ab5; --sp-4: #7ab6d9;
+
   --font-sans: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'Roboto Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
   --text-mono: 12px;
@@ -34,10 +42,13 @@
   --tracking-mono-sm: 0.07em;
   --leading-body: 1.75;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
-  --space-6: 24px; --space-8: 32px; --space-12: 48px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
+  --duration-fast: 110ms;
   --duration-normal: 180ms;
   --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
-  --topbar-height: 56px;
+  --topbar: 52px;
+  --player: 60px;
+  --sidebar: 300px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -52,205 +63,337 @@ html {
 }
 body { margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
+::-webkit-scrollbar-track { background: transparent; }
+
+.mono { font-family: var(--font-mono); font-size: var(--text-mono); }
 .eyebrow {
-  font-family: var(--font-mono);
-  font-size: var(--text-mono-sm);
-  letter-spacing: var(--tracking-mono-sm);
-  text-transform: uppercase;
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); text-transform: uppercase;
   color: var(--color-text-tertiary);
 }
 
-/* ── top bar ─────────────────────────────────────────────── */
+/* ── top bar ───────────────────────────────────────────────── */
 header {
-  height: var(--topbar-height);
-  flex: 0 0 auto;
+  height: var(--topbar); flex: 0 0 auto;
   display: flex; align-items: center; gap: var(--space-6);
-  padding: 0 var(--space-6);
+  padding: 0 var(--space-5);
   border-bottom: 0.5px solid var(--color-border);
   background: var(--color-surface);
 }
 .brand {
-  font-family: var(--font-mono);
-  font-size: var(--text-mono);
-  letter-spacing: 0.02em;
-  color: var(--color-text-primary);
-  white-space: nowrap;
+  font-family: var(--font-mono); font-size: var(--text-mono);
+  letter-spacing: 0.02em; white-space: nowrap; width: calc(var(--sidebar) - 40px);
 }
 .brand b { color: var(--color-accent-text); font-weight: 500; }
 
-.rec-controls { display: flex; align-items: center; gap: var(--space-3); flex: 1 1 auto; }
+.searchbox { flex: 1 1 auto; max-width: 520px; position: relative; }
+.searchbox .k {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  color: var(--color-text-placeholder); pointer-events: none;
+  border: 0.5px solid var(--color-border); padding: 2px 5px;
+}
+.statuses { margin-left: auto; display: flex; gap: var(--space-4); align-items: center; }
+.status { display: flex; align-items: center; gap: 6px; }
+.status i { width: 6px; height: 6px; background: var(--color-terminal-green); flex: 0 0 auto; }
+.status.bad i { background: var(--color-terminal-red); }
+.status.warn i { background: var(--color-terminal-amber); }
+.status span {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); color: var(--color-text-tertiary);
+  text-transform: uppercase;
+}
 
+/* ── controls ──────────────────────────────────────────────── */
 input[type="text"] {
+  width: 100%;
   background: var(--color-surface-input);
   border: 0.5px solid var(--color-border);
   color: var(--color-text-primary);
-  font-family: var(--font-mono);
-  font-size: var(--text-mono);
-  padding: 9px 12px;
-  outline: none;
+  font-family: var(--font-mono); font-size: var(--text-mono);
+  padding: 9px 12px; outline: none;
   transition: border-color var(--duration-normal) var(--ease-smooth),
               background var(--duration-normal) var(--ease-smooth);
 }
 input[type="text"]::placeholder { color: var(--color-text-placeholder); }
 input[type="text"]:hover { border-color: var(--color-border-hover); }
 input[type="text"]:focus { border-color: var(--color-border-focus); background: var(--color-surface-input-focus); }
-#title { width: 240px; }
-#search { width: 100%; max-width: 420px; }
 
 button {
-  font-family: var(--font-mono);
-  font-size: var(--text-mono);
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  line-height: 1;
-  color: var(--color-accent-text);
-  background: var(--color-accent-dim);
-  border: 0.5px solid var(--color-border);
-  border-left: 3px solid var(--color-accent);
-  padding: 10px 18px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--duration-normal) var(--ease-smooth),
-              background var(--duration-normal) var(--ease-smooth);
+  font-family: var(--font-mono); font-size: var(--text-mono); font-weight: 500;
+  letter-spacing: 0.02em; line-height: 1;
+  color: var(--color-accent-text); background: var(--color-accent-dim);
+  border: 0.5px solid var(--color-border); border-left: 3px solid var(--color-accent);
+  padding: 10px 16px; cursor: pointer; white-space: nowrap;
+  transition: color var(--duration-fast) var(--ease-smooth),
+              background var(--duration-fast) var(--ease-smooth);
 }
 button:hover:not(:disabled) { background: var(--color-accent); color: var(--color-bg); }
-button:active:not(:disabled) { transform: scale(0.98); }
-button:disabled { opacity: 0.35; cursor: not-allowed; }
+button:active:not(:disabled) { transform: translateY(0.5px); }
+button:disabled { opacity: 0.3; cursor: not-allowed; }
 button.stop { color: var(--color-terminal-red); border-left-color: var(--color-terminal-red); background: rgba(255,95,86,0.10); }
-button.stop:hover { background: var(--color-terminal-red); color: var(--color-bg); }
-button.ghost { background: transparent; border: 0.5px solid var(--color-border); border-left: 0.5px solid var(--color-border); color: var(--color-text-secondary); }
-button.ghost:hover { color: var(--color-text-primary); background: var(--color-surface-raised); }
+button.stop:hover:not(:disabled) { background: var(--color-terminal-red); color: var(--color-bg); }
+button.ghost {
+  background: transparent; color: var(--color-text-secondary);
+  border: 0.5px solid var(--color-border); border-left: 0.5px solid var(--color-border);
+  padding: 8px 12px;
+}
+button.ghost:hover:not(:disabled) { color: var(--color-text-primary); background: var(--color-surface-raised); border-color: var(--color-border-hover); }
+button.danger:hover:not(:disabled) { color: var(--color-terminal-red); border-color: rgba(255,95,86,0.4); background: rgba(255,95,86,0.08); }
+button.icon { padding: 8px 10px; }
 
-.meter { width: 120px; height: 3px; background: var(--color-surface-raised); position: relative; overflow: hidden; }
+/* ── layout ────────────────────────────────────────────────── */
+main { flex: 1 1 auto; display: grid; grid-template-columns: var(--sidebar) 1fr; min-height: 0; }
+
+aside {
+  border-right: 0.5px solid var(--color-border);
+  background: var(--color-surface);
+  display: flex; flex-direction: column; min-height: 0;
+}
+
+/* record panel */
+.record {
+  padding: var(--space-4) var(--space-4) var(--space-5);
+  border-bottom: 0.5px solid var(--color-border);
+}
+.record .row { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+.record .row button { flex: 1 1 auto; text-align: center; }
+.devwarn {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); line-height: 1.5;
+  color: var(--color-terminal-amber); margin-top: var(--space-3);
+}
+.devwarn.bad { color: var(--color-terminal-red); }
+
+.live { margin-top: var(--space-3); }
+.live-top { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-terminal-red); animation: pulse 1.4s infinite; flex: 0 0 auto; }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.2 } }
+.elapsed { font-family: var(--font-mono); font-size: 15px; color: var(--color-accent-text); letter-spacing: 0.02em; }
+.meter-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 6px; }
+.meter-row span { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); width: 42px; }
+.meter { flex: 1 1 auto; height: 3px; background: var(--color-surface-raised); position: relative; overflow: hidden; }
 .meter i { position: absolute; inset: 0 100% 0 0; background: var(--color-accent); transition: right 90ms linear; }
-.meter-row { display: flex; align-items: center; gap: var(--space-2); }
-.meter-row span { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); width: 44px; }
-.elapsed { font-family: var(--font-mono); font-size: var(--text-mono); color: var(--color-accent-text); }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-terminal-red); animation: pulse 1.4s infinite; }
-@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }
 
-/* ── layout ──────────────────────────────────────────────── */
-main { flex: 1 1 auto; display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
-
-aside { border-right: 0.5px solid var(--color-border); overflow-y: auto; background: var(--color-surface); }
-aside .head { padding: var(--space-4) var(--space-4) var(--space-2); }
+/* meeting list */
+.listhead { padding: var(--space-4) var(--space-4) var(--space-2); display: flex; justify-content: space-between; align-items: baseline; }
+.listhead .count { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-placeholder); }
+#meetings { overflow-y: auto; flex: 1 1 auto; }
 
 .meeting {
   padding: var(--space-3) var(--space-4);
   border-bottom: 0.5px solid var(--color-border);
-  cursor: pointer;
-  border-left: 3px solid transparent;
-  transition: background var(--duration-normal) var(--ease-smooth);
+  cursor: pointer; border-left: 3px solid transparent;
+  transition: background var(--duration-fast) var(--ease-smooth);
 }
 .meeting:hover { background: var(--color-surface-raised); }
 .meeting.active { background: var(--color-surface-raised); border-left-color: var(--color-accent); }
-.meeting .t { font-size: 14px; margin-bottom: 3px; }
-.meeting .m { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); letter-spacing: var(--tracking-mono-sm); }
-.meeting .m .pending { color: var(--color-terminal-red); }
+.meeting .t { font-size: 14px; margin-bottom: 4px; line-height: 1.3; }
+.meeting .m {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  color: var(--color-text-tertiary); letter-spacing: var(--tracking-mono-sm);
+  display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap;
+}
+.pill {
+  border: 0.5px solid var(--color-border); padding: 1px 5px;
+  color: var(--color-text-tertiary);
+}
+.pill.pending { color: var(--color-terminal-amber); border-color: rgba(255,189,46,0.3); }
+.pill.busy { color: var(--color-accent-text); border-color: var(--color-accent-border); }
 
-section.pane { overflow-y: auto; padding: var(--space-8) var(--space-8) var(--space-12); }
-.wrap { max-width: 760px; }
+/* ── main pane ─────────────────────────────────────────────── */
+.panewrap { display: flex; flex-direction: column; min-height: 0; }
+section.pane { overflow-y: auto; flex: 1 1 auto; padding: var(--space-8) var(--space-8) var(--space-12); }
+.wrap { max-width: 780px; }
 
-h1 { font-size: 30px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.15; margin: var(--space-2) 0 var(--space-3); }
-h2 { font-size: 16px; font-weight: 500; margin: var(--space-8) 0 var(--space-3); }
+h1 { font-size: 32px; font-weight: 500; letter-spacing: -0.025em; line-height: 1.12; margin: var(--space-2) 0 var(--space-3); }
+h1 input { font-size: 32px; font-family: var(--font-sans); font-weight: 500; letter-spacing: -0.025em; padding: 2px 6px; margin-left: -7px; }
+h2 { font-size: 15px; font-weight: 500; margin: var(--space-8) 0 var(--space-3); letter-spacing: -0.01em; }
 p, li { color: var(--color-text-secondary); line-height: var(--leading-body); }
 ul { padding-left: 1.1em; margin: 0; }
 li { margin-bottom: var(--space-2); }
 hr { border: none; border-top: 0.5px solid var(--color-border); margin: var(--space-6) 0; }
 
-.meta-line { font-family: var(--font-mono); font-size: var(--text-mono); color: var(--color-text-tertiary); margin-bottom: var(--space-6); }
+.meta-line {
+  font-family: var(--font-mono); font-size: var(--text-mono);
+  color: var(--color-text-tertiary); margin-bottom: var(--space-5);
+  display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center;
+}
+.actions { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-6); }
+
+.tabs { display: flex; gap: var(--space-5); border-bottom: 0.5px solid var(--color-border); margin-bottom: var(--space-6); }
+.tab {
+  font-family: var(--font-mono); font-size: var(--text-mono); color: var(--color-text-tertiary);
+  padding: var(--space-2) 0 var(--space-3); cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color var(--duration-fast) var(--ease-smooth);
+}
+.tab:hover { color: var(--color-text-secondary); }
+.tab.active { color: var(--color-text-primary); border-bottom-color: var(--color-accent); }
 
 .task { list-style: none; margin-left: -1.1em; }
 .task::before { content: '□'; color: var(--color-text-tertiary); margin-right: var(--space-2); }
 .who { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-accent-text); margin-left: var(--space-2); letter-spacing: var(--tracking-mono-sm); }
 
-blockquote { margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); background: var(--color-accent-dim); border-left: 3px solid var(--color-accent); color: var(--color-text-primary); }
+blockquote {
+  margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4);
+  background: var(--color-accent-dim); border-left: 3px solid var(--color-accent);
+  color: var(--color-text-primary);
+}
 blockquote .who { display: block; margin: var(--space-2) 0 0; text-transform: uppercase; color: var(--color-text-tertiary); }
 
-.turn { display: grid; grid-template-columns: 58px 1fr; gap: var(--space-4); margin-bottom: var(--space-3); }
-.turn .t { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); padding-top: 5px; }
-.turn .s { font-family: var(--font-mono); font-size: var(--text-mono-sm); letter-spacing: var(--tracking-mono-sm); text-transform: uppercase; color: var(--color-text-tertiary); }
-.turn.me .s { color: var(--color-accent-text); }
+/* transcript */
+.turn {
+  display: grid; grid-template-columns: 54px 1fr; gap: var(--space-4);
+  padding: var(--space-2) var(--space-3); margin: 0 calc(var(--space-3) * -1) var(--space-1);
+  cursor: pointer; border-left: 2px solid transparent;
+  transition: background var(--duration-fast) var(--ease-smooth);
+}
+.turn:hover { background: var(--color-surface-raised); }
+.turn .t { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-placeholder); padding-top: 6px; }
+.turn:hover .t { color: var(--color-accent-text); }
+.turn .s {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); text-transform: uppercase;
+  color: var(--sp, var(--color-text-tertiary)); margin-bottom: 2px;
+}
 .turn p { margin: 0; }
+.turn.at { background: var(--color-accent-dim); border-left-color: var(--color-accent); }
+.turn.now { background: var(--color-accent-dim); border-left-color: var(--color-accent-text); }
+.turn.now p { color: var(--color-text-primary); }
 
-.tabs { display: flex; gap: var(--space-4); border-bottom: 0.5px solid var(--color-border); margin-bottom: var(--space-6); }
-.tab { font-family: var(--font-mono); font-size: var(--text-mono); color: var(--color-text-tertiary); padding: var(--space-2) 0 var(--space-3); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-.tab:hover { color: var(--color-text-secondary); }
-.tab.active { color: var(--color-text-primary); border-bottom-color: var(--color-accent); }
+/* speakers editor */
+.speakers { border: 0.5px solid var(--color-border); padding: var(--space-4); margin-bottom: var(--space-6); background: var(--color-surface); }
+.speakers .grid { display: grid; grid-template-columns: 130px 1fr; gap: var(--space-3); align-items: center; margin-top: var(--space-3); }
+.speakers code { font-family: var(--font-mono); font-size: var(--text-mono); color: var(--color-text-tertiary); }
+.speakers .row { display: flex; gap: var(--space-2); margin-top: var(--space-4); }
 
+/* search results */
 .hit { padding: var(--space-4) 0; border-bottom: 0.5px solid var(--color-border); cursor: pointer; }
 .hit:hover .hit-text { color: var(--color-text-primary); }
 .hit-head { font-family: var(--font-mono); font-size: var(--text-mono-sm); letter-spacing: var(--tracking-mono-sm); color: var(--color-text-tertiary); margin-bottom: var(--space-2); }
 .hit-head b { color: var(--color-text-secondary); font-weight: 400; }
 .hit-head .sp { color: var(--color-accent-text); }
-.hit-text { color: var(--color-text-secondary); line-height: var(--leading-body); transition: color var(--duration-normal) var(--ease-smooth); }
+.hit-text { color: var(--color-text-secondary); line-height: var(--leading-body); transition: color var(--duration-fast) var(--ease-smooth); }
 
-.empty { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: var(--text-mono); }
+/* states */
+.empty { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: var(--text-mono); line-height: 1.9; }
+.empty b { display: block; color: var(--color-text-secondary); font-weight: 400; font-size: 14px; font-family: var(--font-sans); margin-bottom: var(--space-2); }
+.blank { display: flex; height: 100%; align-items: center; justify-content: center; text-align: center; }
 .warn { color: var(--color-terminal-red); font-family: var(--font-mono); font-size: var(--text-mono); margin-bottom: var(--space-4); }
-
-.devwarn {
-  font-family: var(--font-mono); font-size: var(--text-mono-sm);
-  letter-spacing: var(--tracking-mono-sm); color: var(--color-terminal-red);
-  white-space: nowrap;
-}
-
-/* The turn a search hit landed on, so the eye finds it after the scroll. */
-.turn.at { background: var(--color-accent-dim); box-shadow: -3px 0 0 var(--color-accent); }
-pre.log.failed { border-left-color: var(--color-terminal-red); }
+.skeleton { height: 12px; background: var(--color-surface-raised); margin-bottom: var(--space-3); animation: shimmer 1.3s ease-in-out infinite; }
+@keyframes shimmer { 0%,100% { opacity: 0.4 } 50% { opacity: 0.85 } }
 
 pre.log {
-  font-family: var(--font-mono); font-size: 11px; line-height: 1.6;
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.65;
   background: var(--color-surface); border: 0.5px solid var(--color-border);
   border-left: 3px solid var(--color-accent);
   padding: var(--space-3) var(--space-4); overflow-x: auto;
   color: var(--color-text-secondary); white-space: pre-wrap; margin: 0 0 var(--space-6);
-  max-height: 260px; overflow-y: auto;
+  max-height: 300px; overflow-y: auto;
 }
+pre.log.failed { border-left-color: var(--color-terminal-red); }
+
+/* ── player ────────────────────────────────────────────────── */
+.player {
+  flex: 0 0 auto; height: var(--player);
+  border-top: 0.5px solid var(--color-border); background: var(--color-surface);
+  display: none; align-items: center; gap: var(--space-4); padding: 0 var(--space-6);
+}
+.player.on { display: flex; }
+.player .time { font-family: var(--font-mono); font-size: var(--text-mono); color: var(--color-text-tertiary); white-space: nowrap; }
+.player .time b { color: var(--color-text-primary); font-weight: 400; }
+.seek { flex: 1 1 auto; height: 20px; display: flex; align-items: center; cursor: pointer; }
+.seek .track { width: 100%; height: 3px; background: var(--color-surface-raised); position: relative; }
+.seek .fill { position: absolute; inset: 0 auto 0 0; background: var(--color-accent); width: 0%; }
+.seek .head { position: absolute; top: -3px; width: 2px; height: 9px; background: var(--color-accent-text); left: 0%; }
+.follow { font-family: var(--font-mono); font-size: var(--text-mono-sm); letter-spacing: var(--tracking-mono-sm); color: var(--color-text-tertiary); cursor: pointer; user-select: none; white-space: nowrap; }
+.follow.on { color: var(--color-accent-text); }
+
+/* ── toasts and modal ──────────────────────────────────────── */
+#toasts { position: fixed; bottom: var(--space-6); right: var(--space-6); display: flex; flex-direction: column; gap: var(--space-2); z-index: 40; }
+.toast {
+  font-family: var(--font-mono); font-size: var(--text-mono);
+  background: var(--color-surface-raised); border: 0.5px solid var(--color-border);
+  border-left: 3px solid var(--color-accent); color: var(--color-text-secondary);
+  padding: var(--space-3) var(--space-4); max-width: 420px;
+  animation: rise var(--duration-normal) var(--ease-smooth);
+}
+.toast.bad { border-left-color: var(--color-terminal-red); color: var(--color-terminal-red); }
+.toast.good { border-left-color: var(--color-terminal-green); }
+@keyframes rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal { background: var(--color-surface); border: 0.5px solid var(--color-border-hover); padding: var(--space-6); width: 440px; max-width: calc(100vw - 32px); }
+.modal h3 { margin: var(--space-2) 0 var(--space-3); font-size: 18px; font-weight: 500; }
+.modal p { margin: 0 0 var(--space-5); }
+.modal .row { display: flex; gap: var(--space-2); justify-content: flex-end; }
 </style>
 </head>
 <body>
 
 <header>
   <div class="brand">helmcode<b>·</b>whisper</div>
-  <div class="rec-controls">
-    <input type="text" id="title" placeholder="título de la reunión" value="">
-    <button id="rec">● grabar</button>
-    <div id="live" style="display:none; align-items:center; gap:16px;">
-      <div class="dot"></div>
-      <div class="elapsed" id="elapsed">00:00:00</div>
-      <div id="meters"></div>
-    </div>
+  <div class="searchbox">
+    <input type="text" id="search" placeholder="buscar en todo el histórico…">
+    <div class="k">ctrl k</div>
   </div>
-  <div id="devwarn" class="devwarn" style="display:none"></div>
-  <input type="text" id="search" placeholder="buscar en todo el histórico…">
+  <div class="statuses" id="statuses"></div>
 </header>
 
 <main>
   <aside>
-    <div class="head"><div class="eyebrow">reuniones</div></div>
+    <div class="record">
+      <div class="eyebrow">grabar</div>
+      <div id="idle">
+        <div class="row" style="margin-top:12px"><input type="text" id="title" placeholder="título de la reunión"></div>
+        <div class="row"><button id="rec">● grabar</button></div>
+      </div>
+      <div class="live" id="live" style="display:none">
+        <div class="live-top"><div class="dot"></div><div class="elapsed" id="elapsed">00:00:00</div></div>
+        <div id="meters"></div>
+        <div class="row"><button id="recstop" class="stop">■ parar</button></div>
+      </div>
+      <div id="devwarn" class="devwarn" style="display:none"></div>
+    </div>
+    <div class="listhead"><div class="eyebrow">reuniones</div><div class="count" id="count"></div></div>
     <div id="meetings"></div>
   </aside>
-  <section class="pane"><div class="wrap" id="pane"></div></section>
+
+  <div class="panewrap">
+    <section class="pane"><div class="wrap" id="pane"></div></section>
+    <div class="player" id="player">
+      <button class="ghost icon" id="pp">▶</button>
+      <div class="time"><b id="cur">00:00</b> / <span id="dur">00:00</span></div>
+      <div class="seek" id="seek"><div class="track"><div class="fill" id="fill"></div><div class="head" id="head"></div></div></div>
+      <div class="follow on" id="follow">seguir</div>
+    </div>
+  </div>
 </main>
+
+<audio id="audio" preload="metadata"></audio>
+<div id="toasts"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let state = { recording: null, processing: null, meetings: [], home: '' };
-let selected = null;
-let tab = 'notes';
-let detail = null;
-let searching = false;
-let highlightAt = null;
+let state = { recording: null, processing: null, meetings: [], devices: {}, home: '' };
+let selected = null, detail = null, tab = 'notes', searching = false;
+let highlightAt = null, editingSpeakers = false, nowTurn = -1, following = true;
+
+const audio = $('audio');
 
 const hms = (s) => {
-  s = Math.floor(s || 0);
+  s = Math.max(0, Math.floor(s || 0));
   return [s/3600, (s%3600)/60, s%60].map(n => String(Math.floor(n)).padStart(2,'0')).join(':');
 };
 const mmss = (s) => {
-  s = Math.floor(s || 0);
+  s = Math.max(0, Math.floor(s || 0));
   return String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
 };
-const esc = (t) => (t ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = (t) => (t ?? '').toString().replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 async function api(path, options) {
   const response = await fetch(path, options);
@@ -258,30 +401,63 @@ async function api(path, options) {
   if (data.error) throw new Error(data.error);
   return data;
 }
+const post = (path, body) => api(path, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body || {})
+});
+
+// ── toasts and modal ──────────────────────────────────────
+function toast(message, kind = '') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.textContent = message;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), kind === 'bad' ? 7000 : 4000);
+}
+
+function confirmDialog(title, message, confirmLabel) {
+  return new Promise(resolve => {
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim';
+    scrim.innerHTML = `<div class="modal">
+      <div class="eyebrow">confirmar</div><h3>${esc(title)}</h3><p>${esc(message)}</p>
+      <div class="row"><button class="ghost" data-no>cancelar</button>
+      <button class="ghost danger" data-yes>${esc(confirmLabel)}</button></div></div>`;
+    const close = (value) => { scrim.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
+    const onKey = (event) => { if (event.key === 'Escape') close(false); };
+    scrim.querySelector('[data-no]').onclick = () => close(false);
+    scrim.querySelector('[data-yes]').onclick = () => close(true);
+    scrim.onclick = (event) => { if (event.target === scrim) close(false); };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(scrim);
+  });
+}
 
 // ── polling ───────────────────────────────────────────────
 let wasProcessing = null;
 
 async function refresh() {
   try { state = await api('/api/state'); } catch (e) { return; }
-  renderHeader();
+  renderStatuses();
+  renderRecord();
   renderMeetings();
 
   const now = state.processing;
   // The moment processing finishes, the notes exist on disk but `detail` still
   // holds the copy fetched before the run — the one with no notes in it. The
-  // old code stopped calling renderDetail() exactly then, so the pane sat on
-  // "procesando…" until you clicked another meeting and came back. Refetch on
-  // the transition instead.
-  const justFinished = now && now.done
-    && wasProcessing && !wasProcessing.done
+  // old code stopped re-rendering exactly then, so the pane sat on "procesando…"
+  // until you clicked away and back. Refetch on the transition instead.
+  const justFinished = now && now.done && wasProcessing && !wasProcessing.done
     && wasProcessing.meeting === now.meeting;
   wasProcessing = now ? { meeting: now.meeting, done: now.done } : null;
 
   if (searching) return;
   if (justFinished && now.meeting === selected) {
+    toast(now.failed ? 'el procesado falló' : 'notas listas', now.failed ? 'bad' : 'good');
     await select(now.meeting);
-  } else if (now && !now.done) {
+  } else if (now && !now.done && now.meeting === selected) {
+    // Only when it is *this* meeting: rebuilding the pane under someone who is
+    // reading another one throws away their scroll position.
     renderDetail();
   }
 }
@@ -292,23 +468,34 @@ function schedule() {
 }
 
 // ── header ────────────────────────────────────────────────
-function renderHeader() {
-  const live = state.recording;
-  $('live').style.display = live ? 'flex' : 'none';
-  $('title').style.display = live ? 'none' : 'block';
-  $('rec').textContent = live ? '■ parar' : '● grabar';
-  $('rec').className = live ? 'stop' : '';
+function renderStatuses() {
+  const devices = state.devices || {};
+  const bits = [
+    { ok: !!devices.mic, label: 'micro' },
+    { ok: !!devices.system, warn: true, label: 'sistema' },
+    { ok: !!state.has_key, warn: true, label: 'api' },
+  ];
+  $('statuses').innerHTML = bits.map(b =>
+    `<div class="status ${b.ok ? '' : (b.warn ? 'warn' : 'bad')}"><i></i><span>${b.label}</span></div>`
+  ).join('');
+}
 
+function renderRecord() {
+  const live = state.recording;
+  $('idle').style.display = live ? 'none' : 'block';
+  $('live').style.display = live ? 'block' : 'none';
+
+  const devices = state.devices || {};
   // Said before the recording, not after it. A missing loopback means the
   // meeting is captured with the microphone only, and by the time anyone
   // notices, the meeting has happened.
-  const devices = state.devices || {};
-  const problem = !devices.mic
-    ? 'sin micrófono — la grabación no va a funcionar'
-    : (!devices.system && !live ? 'sin audio de sistema — solo se grabará tu micrófono' : '');
+  let problem = '', bad = false;
+  if (!devices.mic) { problem = 'sin micrófono: la grabación no va a funcionar'; bad = true; }
+  else if (!devices.system && !live) problem = 'sin audio de sistema: solo se grabará tu micrófono';
   $('devwarn').textContent = problem;
+  $('devwarn').className = 'devwarn' + (bad ? ' bad' : '');
   $('devwarn').style.display = problem ? 'block' : 'none';
-  $('rec').disabled = !devices.mic && !live;
+  $('rec').disabled = !devices.mic;
 
   if (!live) return;
   $('elapsed').textContent = hms(live.elapsed);
@@ -322,44 +509,55 @@ function renderHeader() {
 $('rec').onclick = async () => {
   $('rec').disabled = true;
   try {
-    if (state.recording) {
-      const result = await api('/api/record/stop', { method: 'POST' });
-      await refresh();
-      select(result.meeting);
-      if (result.silent_tracks?.length) {
-        alert('Estas pistas salieron en silencio: ' + result.silent_tracks.join(', '));
-      }
+    await post('/api/record/start', { title: $('title').value || 'reunión' });
+    $('title').value = '';
+    await refresh();
+  } catch (e) { toast(e.message, 'bad'); $('rec').disabled = false; }
+};
+
+$('recstop').onclick = async () => {
+  $('recstop').disabled = true;
+  try {
+    const result = await post('/api/record/stop');
+    await refresh();
+    await select(result.meeting);
+    if (result.silent_tracks?.length) {
+      toast('pistas en silencio: ' + result.silent_tracks.join(', ') + ' — revisa el dispositivo', 'bad');
     } else {
-      await api('/api/record/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: $('title').value || 'reunión' })
-      });
-      $('title').value = '';
-      await refresh();
+      toast('grabación guardada · ' + hms(result.seconds), 'good');
     }
-  } catch (e) { alert(e.message); }
-  $('rec').disabled = false;
+  } catch (e) { toast(e.message, 'bad'); }
+  $('recstop').disabled = false;
 };
 
 // ── meetings ──────────────────────────────────────────────
 function renderMeetings() {
+  const busyOn = state.processing && !state.processing.done ? state.processing.meeting : null;
+  $('count').textContent = state.meetings.length || '';
   $('meetings').innerHTML = state.meetings.map(m => `
     <div class="meeting ${m.name === selected ? 'active' : ''}" data-name="${esc(m.name)}">
       <div class="t">${esc(m.title)}</div>
-      <div class="m">${esc(m.date)} · ${mmss(m.seconds)}${m.processed ? '' : ' · <span class="pending">sin procesar</span>'}</div>
-    </div>`).join('') || '<div class="head empty">todavía nada</div>';
-  document.querySelectorAll('.meeting').forEach(el => {
-    el.onclick = () => select(el.dataset.name);
-  });
+      <div class="m">
+        <span>${esc(m.date)}</span><span>${mmss(m.seconds)}</span>
+        ${m.name === busyOn ? '<span class="pill busy">procesando</span>'
+          : (m.processed ? '' : '<span class="pill pending">sin procesar</span>')}
+        ${(m.speakers || []).length ? `<span class="pill">${m.speakers.length} voces</span>` : ''}
+      </div>
+    </div>`).join('') || `<div class="listhead empty">todavía nada</div>`;
+  document.querySelectorAll('.meeting').forEach(el => { el.onclick = () => select(el.dataset.name); });
 }
 
 async function select(name, options = {}) {
   searching = false;
   $('search').value = '';
+  const changed = name !== selected;
   selected = name;
   tab = options.tab || 'notes';
   highlightAt = options.at ?? null;
+  editingSpeakers = false;
+
+  if (changed) { $('pane').innerHTML = skeleton(); detachAudio(); }
+
   try {
     detail = await api('/api/meeting?name=' + encodeURIComponent(name));
   } catch (e) {
@@ -369,48 +567,81 @@ async function select(name, options = {}) {
   }
   renderMeetings();
   renderDetail();
+  if (changed) attachAudio(name);
 
   if (highlightAt !== null) {
     const turn = document.querySelector('.turn.at');
     if (turn) turn.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (detail.has_audio) seekTo(highlightAt);
   }
 }
 
+const skeleton = () => `<div style="max-width:520px">
+  <div class="skeleton" style="width:35%;height:9px"></div>
+  <div class="skeleton" style="width:70%;height:26px;margin-bottom:24px"></div>
+  ${'<div class="skeleton"></div>'.repeat(4)}
+  <div class="skeleton" style="width:60%"></div></div>`;
+
 // ── detail ────────────────────────────────────────────────
+const SPEAKER_VARS = ['--sp-0','--sp-1','--sp-2','--sp-3','--sp-4'];
+function speakerColor(name) {
+  const list = (detail?.raw_speakers || []);
+  const mapped = Object.entries(detail?.speaker_names || {});
+  let index = list.indexOf(name);
+  if (index < 0) {
+    const raw = mapped.find(([, value]) => value === name);
+    index = raw ? list.indexOf(raw[0]) : -1;
+  }
+  if (name === 'Me' || name === 'Yo') return 'var(--color-accent-text)';
+  return `var(${SPEAKER_VARS[(index < 0 ? 0 : index) % SPEAKER_VARS.length]})`;
+}
+
 function renderDetail() {
-  if (!selected || !detail) { $('pane').innerHTML = '<div class="empty">selecciona una reunión</div>'; return; }
+  if (searching) return;
+  if (!selected || !detail) {
+    $('pane').innerHTML = `<div class="blank"><div class="empty">
+      <b>Nada seleccionado</b>elige una reunión de la izquierda,<br>o graba una nueva</div></div>`;
+    return;
+  }
   const meta = detail.meta || {};
-  const running = state.processing && state.processing.meeting === selected && !state.processing.done;
+  const proc = state.processing && state.processing.meeting === selected ? state.processing : null;
+  const running = proc && !proc.done;
 
   let html = `<div class="eyebrow">notas de reunión</div>
-    <h1>${esc(meta.title || selected)}</h1>
-    <div class="meta-line">${esc((meta.started_at || '').replace('T',' ').slice(0,16))} · ${Math.round((meta.duration_seconds||0)/60)} min${
-      (meta.speakers||[]).length ? ' · ' + esc(meta.speakers.join(', ')) : ''}</div>`;
+    <h1 id="h1">${esc(meta.title || selected)}</h1>
+    <div class="meta-line">
+      <span>${esc((meta.started_at || '').replace('T',' ').slice(0,16))}</span>
+      <span>${Math.round((meta.duration_seconds||0)/60)} min</span>
+      ${(meta.speakers||[]).length ? `<span>${(detail.raw_speakers||[]).length} voces</span>` : ''}
+      ${meta.language ? `<span>${esc(meta.language)}</span>` : ''}
+    </div>`;
 
-  if (state.processing && state.processing.meeting === selected) {
-    if (state.processing.failed) {
-      html += `<div class="warn">el procesado falló — el detalle está al final del log</div>`;
-    }
-    html += `<pre class="log${state.processing.failed ? ' failed' : ''}">${
-      esc((state.processing.lines||[]).join('\n'))}</pre>`;
+  html += `<div class="actions">
+    ${detail.notes ? `<button class="ghost" data-act="reprocess">volver a procesar</button>` : ''}
+    ${(detail.files||[]).includes('notes.html') ? `<button class="ghost" data-act="html">abrir notes.html</button>` : ''}
+    ${(detail.raw_speakers||[]).length ? `<button class="ghost" data-act="speakers">nombres</button>` : ''}
+    <button class="ghost" data-act="rename">renombrar</button>
+    <button class="ghost" data-act="reveal">carpeta</button>
+    <button class="ghost danger" data-act="delete">borrar</button>
+  </div>`;
+
+  if (proc) {
+    if (proc.failed) html += `<div class="warn">el procesado falló — el detalle está al final del log</div>`;
+    html += `<pre class="log${proc.failed ? ' failed' : ''}">${esc((proc.lines||[]).join('\n'))}</pre>`;
   }
+
+  if (editingSpeakers) html += speakersEditor();
 
   if (!detail.notes) {
     html += running
-      ? '<div class="empty">procesando…</div>'
-      : `<button id="go">${state.processing?.failed && state.processing.meeting === selected
-           ? 'volver a intentarlo' : 'procesar ahora'}</button>
-         <p class="empty" style="margin-top:16px">transcribe, separa hablantes y escribe las notas</p>`;
-    $('pane').innerHTML = html;
-    const go = $('go');
-    if (go) go.onclick = async () => {
-      go.disabled = true;
-      try {
-        await api('/api/process', { method:'POST', headers:{'Content-Type':'application/json'},
-                                    body: JSON.stringify({ meeting: selected }) });
-        await refresh();
-      } catch (e) { alert(e.message); go.disabled = false; }
-    };
+      ? `<div class="empty"><b>Procesando</b>transcribe, separa hablantes y escribe las notas.<br>
+         La diarización corre en tu máquina y es el paso lento.</div>`
+      : `<div class="empty"><b>Sin procesar todavía</b>
+         transcribe, separa hablantes y escribe las notas.</div>
+         <div class="actions" style="margin-top:16px">
+           <button data-act="process">${proc?.failed ? 'volver a intentarlo' : 'procesar ahora'}</button>
+         </div>`;
+    paint(html);
     return;
   }
 
@@ -430,35 +661,184 @@ function renderDetail() {
     if (n.open_questions?.length) html += `<h2>Preguntas abiertas</h2><ul>${n.open_questions.map(q=>`<li>${esc(q)}</li>`).join('')}</ul>`;
     if (n.quotes?.length) html += `<h2>Citas</h2>${n.quotes.map(q=>
       `<blockquote>${esc(q.text)}<span class="who">${esc(q.speaker||'—')}</span></blockquote>`).join('')}`;
-    html += `<hr><button class="ghost" id="reprocess">volver a procesar</button>`;
   } else {
-    // The turn a search hit points at. Passages group several turns, so the
-    // hit's timestamp is the start of the passage; the turn that contains it
-    // is the last one that began at or before it.
     const turns = detail.transcript || [];
     let mark = -1;
     if (highlightAt !== null) {
+      // Passages group several turns, so a hit's timestamp is the start of the
+      // passage; the turn holding it is the last one that began at or before it.
       turns.forEach((t, index) => { if (t.start <= highlightAt + 0.01) mark = index; });
     }
     html += turns.map((t, index) => `
-      <div class="turn ${t.speaker==='Me'?'me':''} ${index===mark?'at':''}">
+      <div class="turn ${index===mark?'at':''}" data-turn="${index}" data-start="${t.start}">
         <div class="t">${mmss(t.start)}</div>
-        <div><div class="s">${esc(t.speaker)}</div><p>${esc(t.text)}</p></div>
+        <div><div class="s" style="--sp:${speakerColor(t.speaker)}">${esc(t.speaker)}</div><p>${esc(t.text)}</p></div>
       </div>`).join('') || '<div class="empty">sin transcripción</div>';
   }
+  paint(html);
+}
 
+function speakersEditor() {
+  const mapping = detail.speaker_names || {};
+  return `<div class="speakers">
+    <div class="eyebrow">nombres de los hablantes</div>
+    <div class="grid">${(detail.raw_speakers||[]).map(raw => `
+      <code>${esc(raw)}</code>
+      <input type="text" data-speaker="${esc(raw)}" value="${esc(mapping[raw] || '')}"
+             placeholder="${esc(raw)}">`).join('')}</div>
+    <div class="row">
+      <button data-act="save-speakers">guardar</button>
+      <button class="ghost" data-act="cancel-speakers">cancelar</button>
+    </div>
+  </div>`;
+}
+
+function paint(html) {
   $('pane').innerHTML = html;
-  document.querySelectorAll('.tab').forEach(el => el.onclick = () => { tab = el.dataset.tab; renderDetail(); });
-  const again = $('reprocess');
-  if (again) again.onclick = async () => {
-    again.disabled = true;
-    try {
-      await api('/api/process', { method:'POST', headers:{'Content-Type':'application/json'},
-                                  body: JSON.stringify({ meeting: selected }) });
+  document.querySelectorAll('.tab').forEach(el =>
+    el.onclick = () => { tab = el.dataset.tab; renderDetail(); });
+  document.querySelectorAll('.turn').forEach(el =>
+    el.onclick = () => seekTo(parseFloat(el.dataset.start)));
+  document.querySelectorAll('[data-act]').forEach(el => el.onclick = () => act(el.dataset.act, el));
+  if (nowTurn >= 0) markNow(nowTurn, false);
+}
+
+async function act(what, element) {
+  try {
+    if (what === 'process' || what === 'reprocess') {
+      element.disabled = true;
+      await post('/api/process', { meeting: selected });
       await refresh();
-    } catch (e) { alert(e.message); again.disabled = false; }
+    } else if (what === 'html') {
+      window.open('/api/file?name=' + encodeURIComponent(selected) + '&file=notes.html', '_blank');
+    } else if (what === 'reveal') {
+      await post('/api/reveal', { meeting: selected });
+    } else if (what === 'speakers') {
+      editingSpeakers = !editingSpeakers; renderDetail();
+    } else if (what === 'cancel-speakers') {
+      editingSpeakers = false; renderDetail();
+    } else if (what === 'save-speakers') {
+      const names = {};
+      document.querySelectorAll('[data-speaker]').forEach(input => {
+        if (input.value.trim()) names[input.dataset.speaker] = input.value.trim();
+      });
+      detail = await post('/api/speakers', { meeting: selected, names });
+      editingSpeakers = false;
+      renderDetail();
+      await refresh();
+      toast('nombres guardados', 'good');
+    } else if (what === 'rename') {
+      startRename();
+    } else if (what === 'delete') {
+      const ok = await confirmDialog(
+        'Borrar la reunión',
+        'Se borran el audio, la transcripción y las notas, y desaparece de la búsqueda. No se puede deshacer.',
+        'borrar');
+      if (!ok) return;
+      await post('/api/delete', { meeting: selected });
+      selected = null; detail = null; detachAudio();
+      await refresh();
+      renderDetail();
+      toast('reunión borrada');
+    }
+  } catch (e) { toast(e.message, 'bad'); if (element) element.disabled = false; }
+}
+
+function startRename() {
+  const heading = $('h1');
+  const current = (detail.meta || {}).title || selected;
+  heading.innerHTML = `<input type="text" id="newtitle" value="${esc(current)}">`;
+  const input = $('newtitle');
+  input.focus(); input.select();
+  const commit = async () => {
+    const title = input.value.trim();
+    input.onblur = null;
+    if (!title || title === current) { renderDetail(); return; }
+    try {
+      await post('/api/rename', { meeting: selected, title });
+      await refresh();
+      await select(selected);
+      toast('renombrada', 'good');
+    } catch (e) { toast(e.message, 'bad'); renderDetail(); }
+  };
+  input.onblur = commit;
+  input.onkeydown = (event) => {
+    if (event.key === 'Enter') commit();
+    if (event.key === 'Escape') { input.onblur = null; renderDetail(); }
   };
 }
+
+// ── audio ─────────────────────────────────────────────────
+function attachAudio(name) {
+  if (!detail || !detail.has_audio) { detachAudio(); return; }
+  audio.src = '/api/audio?name=' + encodeURIComponent(name);
+  audio.load();
+  $('player').classList.add('on');
+  $('pp').textContent = '▶';
+  $('cur').textContent = '00:00';
+  $('dur').textContent = mmss((detail.meta || {}).duration_seconds || 0);
+  nowTurn = -1;
+}
+
+function detachAudio() {
+  audio.pause();
+  audio.removeAttribute('src');
+  $('player').classList.remove('on');
+  nowTurn = -1;
+}
+
+function seekTo(seconds) {
+  if (!detail?.has_audio) return;
+  audio.currentTime = Math.max(0, seconds);
+  audio.play().catch(() => {/* the file may still be being mixed */});
+}
+
+$('pp').onclick = () => { audio.paused ? audio.play().catch(e => toast(e.message, 'bad')) : audio.pause(); };
+audio.onplay = () => { $('pp').textContent = '❚❚'; };
+audio.onpause = () => { $('pp').textContent = '▶'; };
+audio.onloadedmetadata = () => {
+  if (isFinite(audio.duration)) $('dur').textContent = mmss(audio.duration);
+};
+audio.onerror = () => {
+  // The mix is built on demand; a first play can land before ffmpeg finishes.
+  if (audio.getAttribute('src')) toast('el audio todavía se está preparando, prueba en unos segundos');
+};
+
+audio.ontimeupdate = () => {
+  const total = isFinite(audio.duration) ? audio.duration : ((detail?.meta||{}).duration_seconds || 0);
+  const fraction = total ? (audio.currentTime / total) * 100 : 0;
+  $('fill').style.width = fraction + '%';
+  $('head').style.left = fraction + '%';
+  $('cur').textContent = mmss(audio.currentTime);
+  if (tab === 'transcript') followTranscript(audio.currentTime);
+};
+
+function followTranscript(at) {
+  const turns = detail?.transcript || [];
+  if (!turns.length) return;
+  let index = -1;
+  for (let i = 0; i < turns.length; i++) {
+    if (turns[i].start <= at + 0.05) index = i; else break;
+  }
+  if (index === nowTurn) return;
+  nowTurn = index;
+  markNow(index, following);
+}
+
+function markNow(index, scroll) {
+  document.querySelectorAll('.turn.now').forEach(el => el.classList.remove('now'));
+  const el = document.querySelector(`.turn[data-turn="${index}"]`);
+  if (!el) return;
+  el.classList.add('now');
+  if (scroll) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+$('seek').onclick = (event) => {
+  const box = $('seek').getBoundingClientRect();
+  const total = isFinite(audio.duration) ? audio.duration : ((detail?.meta||{}).duration_seconds || 0);
+  if (total) seekTo(((event.clientX - box.left) / box.width) * total);
+};
+$('follow').onclick = () => { following = !following; $('follow').className = 'follow' + (following ? ' on' : ''); };
 
 // ── search ────────────────────────────────────────────────
 let searchTimer = null;
@@ -466,14 +846,22 @@ $('search').oninput = () => {
   clearTimeout(searchTimer);
   const term = $('search').value.trim();
   if (!term) { searching = false; renderDetail(); return; }
-  searchTimer = setTimeout(() => runSearch(term), 350);
+  searchTimer = setTimeout(() => runSearch(term), 320);
 };
+
+document.addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === 'k') { event.preventDefault(); $('search').focus(); $('search').select(); }
+  if (event.key === 'Escape' && document.activeElement === $('search')) { $('search').value = ''; searching = false; $('search').blur(); renderDetail(); }
+  if (event.key === ' ' && detail?.has_audio && !/input/i.test(document.activeElement.tagName)) {
+    event.preventDefault(); $('pp').onclick();
+  }
+});
 
 async function runSearch(term) {
   searching = true;
   selected = null;
   renderMeetings();
-  $('pane').innerHTML = '<div class="empty">buscando…</div>';
+  $('pane').innerHTML = skeleton();
   try {
     const result = await api('/api/search?q=' + encodeURIComponent(term));
     let html = `<div class="eyebrow">resultados</div><h1>${esc(term)}</h1>`;
@@ -482,16 +870,15 @@ async function runSearch(term) {
       <div class="hit" data-meeting="${esc(h.meeting_id)}" data-start="${h.start}">
         <div class="hit-head"><b>${esc(h.meeting)}</b> · ${esc(h.date)} · ${mmss(h.start)} · <span class="sp">${esc(h.speaker)}</span></div>
         <div class="hit-text">${esc(h.text)}</div>
-      </div>`).join('') : '<div class="empty">nada encontrado</div>';
+      </div>`).join('')
+      : `<div class="empty"><b>Nada encontrado</b>prueba con otras palabras — la búsqueda es por significado,<br>
+         así que describir la idea funciona mejor que adivinar el término exacto</div>`;
     $('pane').innerHTML = html;
     // The hits were styled as clickable from the start — pointer cursor, hover
-    // state — and did nothing. Finding the moment is the whole point of the
-    // search, so clicking one opens its meeting at that turn.
+    // state — and did nothing. Finding the moment is the point of the search,
+    // so a hit opens its meeting at that turn, and starts playing there.
     document.querySelectorAll('.hit').forEach(el => {
-      el.onclick = () => select(el.dataset.meeting, {
-        tab: 'transcript',
-        at: parseFloat(el.dataset.start),
-      });
+      el.onclick = () => select(el.dataset.meeting, { tab: 'transcript', at: parseFloat(el.dataset.start) });
     });
   } catch (e) {
     $('pane').innerHTML = `<div class="warn">${esc(e.message)}</div>`;
