@@ -1,9 +1,20 @@
 name: ci
 
+# Manual only, for now, and not because the tests are unreliable.
+#
+# This job checks out helmcode-whisper alongside, because the interface imports
+# it. While that repo is private, the token GitHub hands a workflow cannot see
+# it — a repository's GITHUB_TOKEN is scoped to that repository — and the
+# checkout fails with "Not Found" on every push. A permanently red CI teaches
+# people to ignore CI, so it waits here instead.
+#
+# To turn it on, either:
+#   - make both repositories public, and delete this comment along with the
+#     `workflow_dispatch` line below, restoring push and pull_request; or
+#   - add a token with read access to helmcode-whisper as the repository secret
+#     HELMCODE_WHISPER_TOKEN, which the checkout step already looks for.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
