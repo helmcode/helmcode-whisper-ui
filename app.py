@@ -112,7 +112,12 @@ class Recording:
         # A silent take is worth saying out loud here too — the CLI learned that
         # lesson from a microphone that was muted for a whole test session.
         silent = [label for label, recorder in self.tracks if recorder.max_peak < 0.001]
-        return {"meeting": self.meeting.path.name, "seconds": duration, "silent_tracks": silent}
+        return {
+            "meeting": self.meeting.path.name,
+            "seconds": duration,
+            "tracks": [label for label, _ in self.tracks],
+            "silent_tracks": silent,
+        }
 
 
 class Processing:
@@ -752,10 +757,20 @@ class Handler(BaseHTTPRequestHandler):
                 # narrowing to one space does not leave three results.
                 scope = (query.get("space") or [""])[0].strip()
                 hits, semantic = search_hits(CONFIG, term, limit=60 if scope else 12)
-                spaces = {
-                    meeting.path.name: (meeting.load_meta().get("space") or "")
-                    for meeting in Meeting.all(CONFIG.home)
-                }
+                # Only the meetings that came back, not the whole archive. The
+                # earlier version read every meta.json on every keystroke-
+                # debounced search, which is fine at two meetings and five
+                # hundred file reads at five hundred.
+                spaces: dict[str, str] = {}
+                for hit in hits:
+                    if hit.meeting_id in spaces:
+                        continue
+                    try:
+                        spaces[hit.meeting_id] = (
+                            resolve(hit.meeting_id).load_meta().get("space") or ""
+                        )
+                    except FileNotFoundError:
+                        spaces[hit.meeting_id] = ""
                 chosen = [
                     hit for hit in hits if not scope or spaces.get(hit.meeting_id, "") == scope
                 ][:12]
@@ -823,7 +838,14 @@ class Handler(BaseHTTPRequestHandler):
                 # Nobody records a meeting in order not to read it. Processing
                 # starts on its own unless the caller says otherwise, so the
                 # journey does not stop at a folder full of WAV files.
-                if payload.get("process", True) and CONFIG.api_key:
+                # ...but not when there was nothing to record. Every track
+                # silent means `process` will reach the transcription step, find
+                # no speech and fail, so the reward for a muted microphone would
+                # be a red error rather than the warning that explains it.
+                everything_silent = bool(result["tracks"]) and len(result["silent_tracks"]) == len(
+                    result["tracks"]
+                )
+                if payload.get("process", True) and CONFIG.api_key and not everything_silent:
                     with _lock:
                         if processing is None or processing.done:
                             processing = Processing(result["meeting"])
