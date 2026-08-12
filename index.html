@@ -358,6 +358,43 @@ blockquote .who { display: block; margin: var(--space-2) 0 0; text-transform: up
 .skeleton { height: 12px; background: var(--color-surface-raised); margin-bottom: var(--space-3); animation: shimmer 1.3s ease-in-out infinite; }
 @keyframes shimmer { 0%,100% { opacity: 0.4 } 50% { opacity: 0.85 } }
 
+/* ── the processing wait ───────────────────────────────────── */
+/* This used to be raw terminal output scrolling in a box, for up to half an
+   hour on a long meeting. Named steps with a real bar is the same information
+   with the shape of a progress report instead of a log tail. */
+.steps { border: 0.5px solid var(--color-border); margin-bottom: var(--space-4); }
+.stepline {
+  display: grid; grid-template-columns: 16px 1fr auto; gap: var(--space-3);
+  align-items: baseline; padding: var(--space-3) var(--space-4);
+  border-bottom: 0.5px solid var(--color-border);
+}
+.stepline:last-child { border-bottom: none; }
+.stepline .mark { font-family: var(--font-mono); font-size: var(--text-mono); }
+.stepline .what { font-size: 14px; color: var(--color-text-secondary); }
+.stepline .side {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.stepline.done .mark { color: var(--color-terminal-green); }
+.stepline.done .what { color: var(--color-text-tertiary); }
+.stepline.running .mark { color: var(--color-accent-text); }
+.stepline.running .what { color: var(--color-text-primary); }
+.stepline.failed .mark, .stepline.failed .side { color: var(--color-terminal-red); }
+.stepline.skipped .mark, .stepline.skipped .what { color: var(--color-text-placeholder); }
+.stepline.waiting .mark, .stepline.waiting .what { color: var(--color-text-placeholder); }
+
+.bar { grid-column: 2 / 4; height: 3px; background: var(--color-surface-raised); position: relative; margin-top: 6px; }
+.bar i { position: absolute; inset: 0 auto 0 0; background: var(--color-accent); transition: width 220ms var(--ease-smooth); }
+.bar.pulse i { width: 100% !important; opacity: 0.28; animation: shimmer 1.6s ease-in-out infinite; }
+
+.disclose {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm);
+  letter-spacing: var(--tracking-mono-sm); color: var(--color-text-tertiary);
+  cursor: pointer; user-select: none; margin-bottom: var(--space-4);
+}
+.disclose:hover { color: var(--color-accent-text); }
+
 pre.log {
   font-family: var(--font-mono); font-size: 11px; line-height: 1.65;
   background: var(--color-surface); border: 0.5px solid var(--color-border);
@@ -542,8 +579,12 @@ async function refresh() {
 }
 
 function schedule() {
-  const busy = state.recording || (state.processing && !state.processing.done);
-  setTimeout(async () => { await refresh(); schedule(); }, busy ? 400 : 4000);
+  const processing = state.processing && !state.processing.done;
+  // Recording needs 400ms because the meters have to move. Processing does not:
+  // the steps change every few minutes, and a long diarization would otherwise
+  // mean thousands of pointless round trips.
+  const wait = state.recording ? 400 : (processing ? 1200 : 4000);
+  setTimeout(async () => { await refresh(); schedule(); }, wait);
 }
 
 // ── header ────────────────────────────────────────────────
@@ -662,6 +703,8 @@ $('recstop').onclick = async () => {
     await select(result.meeting);
     if (result.silent_tracks?.length) {
       toast('pistas en silencio: ' + result.silent_tracks.join(', ') + ' — revisa el dispositivo', 'bad');
+    } else if (result.processing) {
+      toast('grabación guardada · ' + hms(result.seconds) + ' — procesando', 'good');
     } else {
       toast('grabación guardada · ' + hms(result.seconds), 'good');
     }
@@ -883,22 +926,18 @@ peticiones a internet. Sirve para mandársela a alguien que no tiene la herramie
     <button class="ghost danger" data-act="delete">borrar</button>
   </div>`;
 
-  if (proc) {
-    if (proc.failed) html += `<div class="warn">el procesado falló — el detalle está al final del log</div>`;
-    html += `<pre class="log${proc.failed ? ' failed' : ''}">${esc((proc.lines||[]).join('\n'))}</pre>`;
-  }
+  if (proc) html += stepsPanel(proc);
 
   if (editingSpeakers) html += speakersEditor();
 
   if (!detail.notes) {
-    html += running
-      ? `<div class="empty"><b>Procesando</b>transcribe, separa hablantes y escribe las notas.<br>
-         La diarización corre en tu máquina y es el paso lento.</div>`
-      : `<div class="empty"><b>Sin procesar todavía</b>
-         transcribe, separa hablantes y escribe las notas.</div>
+    if (!running) {
+      html += `<div class="empty"><b>Sin procesar todavía</b>
+         transcribe, separa las voces y escribe las notas.</div>
          <div class="actions" style="margin-top:16px">
            <button data-act="process">${proc?.failed ? 'volver a intentarlo' : 'procesar ahora'}</button>
          </div>`;
+    }
     paint(html);
     return;
   }
@@ -934,6 +973,66 @@ peticiones a internet. Sirve para mandársela a alguien que no tiene la herramie
       </div>`).join('') || '<div class="empty">sin transcripción</div>';
   }
   paint(html);
+}
+
+// ── the processing wait ───────────────────────────────────
+const STEP_LABELS = {
+  prepare: 'preparar el audio',
+  transcribe: 'transcribir',
+  diarize: 'separar las voces',
+  merge: 'juntar las pistas',
+  notes: 'escribir las notas',
+  index: 'indexar para la búsqueda',
+};
+const MARKS = { done: '✓', running: '▶', failed: '×', skipped: '–', waiting: '·' };
+let showLog = false;
+
+function stepsPanel(proc) {
+  const rows = (proc.steps || []).map(step => {
+    const label = STEP_LABELS[step.step] || step.step;
+    let side = '', bar = '';
+
+    if (step.state === 'done') {
+      side = step.from_cache ? 'de caché' : `${Math.round(step.seconds || 0)}s`;
+      if (step.step === 'transcribe' && step.segments) side += ` · ${step.segments} segmentos`;
+      if (step.step === 'merge' && step.turns) side = `${step.turns} turnos`;
+      if (step.step === 'index' && step.passages !== undefined) side = `${step.passages} pasajes`;
+      if (step.step === 'diarize' && step.device) side += ` · ${step.device}`;
+    } else if (step.state === 'skipped') {
+      side = step.reason || 'omitido';
+    } else if (step.state === 'failed') {
+      side = 'falló';
+    } else if (step.state === 'running') {
+      if (step.step === 'transcribe' && proc.chunks?.total) {
+        const { done, total } = proc.chunks;
+        side = `${done}/${total} fragmentos`;
+        bar = `<div class="bar"><i style="width:${(done / total) * 100}%"></i></div>`;
+      } else if (step.step === 'diarize' && step.estimate_seconds) {
+        // The estimate comes from a factor measured across four runs, so it is a
+        // guide and is worded as one. Never a countdown pretending to be exact.
+        const left = Math.max(0, step.estimate_seconds - (proc.elapsed || 0));
+        side = left > 60 ? `~${Math.ceil(left / 60)} min restantes` : 'casi';
+        const pct = Math.min(99, ((proc.elapsed || 0) / step.estimate_seconds) * 100);
+        bar = `<div class="bar"><i style="width:${pct}%"></i></div>`;
+      } else {
+        bar = `<div class="bar pulse"><i></i></div>`;
+      }
+    }
+
+    return `<div class="stepline ${step.state}">
+      <div class="mark">${MARKS[step.state] || '·'}</div>
+      <div class="what">${esc(label)}</div>
+      <div class="side">${esc(side)}</div>
+      ${bar}
+    </div>`;
+  }).join('');
+
+  return `${proc.failed ? `<div class="warn">el procesado falló${
+      proc.error ? ' — ' + esc(proc.error) : ''}</div>` : ''}
+    <div class="steps">${rows}</div>
+    <div class="disclose" data-act="toggle-log">${showLog ? '▾' : '▸'} ver detalle</div>
+    ${showLog ? `<pre class="log${proc.failed ? ' failed' : ''}">${
+      esc((proc.lines || []).join('\n'))}</pre>` : ''}`;
 }
 
 function speakersEditor() {
@@ -1025,6 +1124,8 @@ async function act(what, element) {
       });
       toast(filled ? `${filled} nombres propuestos — revísalos y guarda`
                    : 'el transcript no dice cómo se llaman');
+    } else if (what === 'toggle-log') {
+      showLog = !showLog; renderDetail();
     } else if (what === 'save-speakers') {
       const names = {};
       document.querySelectorAll('[data-speaker]').forEach(input => {

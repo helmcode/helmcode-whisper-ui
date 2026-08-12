@@ -116,42 +116,118 @@ class Recording:
 
 
 class Processing:
-    """One `hcw process` run, with its output kept for the UI to show."""
+    """One `hcw process` run, followed by reading its step events.
+
+    `--progress-json` puts one JSON object per line on stdout and moves the
+    terminal interface to stderr, so the two streams are read separately: stdout
+    becomes the state of each step, stderr becomes the log behind "ver detalle".
+    Scraping output written for people would have worked until the first time a
+    label got reworded.
+    """
+
+    STEPS = ("prepare", "transcribe", "diarize", "merge", "notes", "index")
 
     def __init__(self, meeting_name: str) -> None:
         self.meeting = meeting_name
         self.lines: list[str] = []
         self.done = False
         self.failed = False
+        self.error: str | None = None
+        self.started_at = time.monotonic()
+        self.title = ""
+        self.duration_seconds = 0.0
+        self.steps: dict[str, dict] = {
+            name: {"step": name, "state": "waiting"} for name in self.STEPS
+        }
+        self.chunks = {"done": 0, "total": 0}
+        self._guard = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
+    # ── reading the child ────────────────────────────────────
+
     def _run(self) -> None:
         process = subprocess.Popen(
-            [sys.executable, "-m", "helmcode_whisper.cli", "process", self.meeting],
+            [
+                sys.executable, "-m", "helmcode_whisper.cli", "process",
+                self.meeting, "--progress-json",
+            ],
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
+            bufsize=1,
             # No cwd override: the child inherits this process's environment,
             # including whatever the .env put there, so it resolves the API key
             # exactly the way the server did.
         )
-        assert process.stdout is not None
+        assert process.stdout is not None and process.stderr is not None
+
+        # The log has to be drained on its own thread. A child that fills the
+        # stderr pipe while nobody reads it blocks forever, and the run would
+        # stall at whatever step happened to be printing.
+        log = threading.Thread(target=self._read_log, args=(process.stderr,), daemon=True)
+        log.start()
+
         for line in process.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                self._apply(json.loads(line))
+            except ValueError:
+                self.lines.append(line)  # not an event: keep it where it can be seen
+
+        code = process.wait()
+        log.join(timeout=5)
+        with self._guard:
+            self.failed = code != 0
+            for step in self.steps.values():
+                # A step still "running" when the process exited did not finish.
+                if step["state"] == "running":
+                    step["state"] = "failed" if self.failed else "done"
+            self.done = True
+
+    def _read_log(self, stream) -> None:  # noqa: ANN001
+        for line in stream:
             line = line.rstrip()
             if line:
                 self.lines.append(line)
-        self.failed = process.wait() != 0
-        self.done = True
+
+    def _apply(self, event: dict) -> None:
+        kind = event.get("event")
+        with self._guard:
+            if kind == "start":
+                self.title = event.get("title") or ""
+                self.duration_seconds = float(event.get("duration_seconds") or 0)
+            elif kind == "step":
+                name = event.get("step")
+                if name in self.steps:
+                    self.steps[name] = {**self.steps[name], **event, "at": time.monotonic()}
+            elif kind == "chunks":
+                self.chunks = {"done": event.get("done", 0), "total": event.get("total", 0)}
+            elif kind == "error":
+                self.error = event.get("message")
+
+    # ── what the UI reads ────────────────────────────────────
 
     def status(self) -> dict:
+        with self._guard:
+            steps = [dict(self.steps[name]) for name in self.STEPS]
+            chunks = dict(self.chunks)
+            running = next((s for s in steps if s["state"] == "running"), None)
         return {
             "meeting": self.meeting,
-            "lines": self.lines[-60:],
+            "title": self.title,
+            "steps": steps,
+            "chunks": chunks,
+            "current": running["step"] if running else None,
+            "elapsed": time.monotonic() - self.started_at,
+            "lines": self.lines[-80:],
             "done": self.done,
             "failed": self.failed,
+            "error": self.error,
         }
 
 
@@ -729,6 +805,14 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     result = recording.stop()
                     recording = None
+                # Nobody records a meeting in order not to read it. Processing
+                # starts on its own unless the caller says otherwise, so the
+                # journey does not stop at a folder full of WAV files.
+                if payload.get("process", True) and CONFIG.api_key:
+                    with _lock:
+                        if processing is None or processing.done:
+                            processing = Processing(result["meeting"])
+                            result["processing"] = True
                 self._send(result)
             elif route.path == "/api/process":
                 with _lock:
