@@ -746,20 +746,34 @@ class Handler(BaseHTTPRequestHandler):
                 if not term:
                     self._send({"hits": [], "semantic": True})
                     return
-                hits, semantic = search_hits(CONFIG, term, limit=12)
+                # Scoping happens after retrieval, not inside it: the ranking is
+                # over the whole archive either way, and a space is a label the
+                # index knows nothing about. Ask for more when filtering, so
+                # narrowing to one space does not leave three results.
+                scope = (query.get("space") or [""])[0].strip()
+                hits, semantic = search_hits(CONFIG, term, limit=60 if scope else 12)
+                spaces = {
+                    meeting.path.name: (meeting.load_meta().get("space") or "")
+                    for meeting in Meeting.all(CONFIG.home)
+                }
+                chosen = [
+                    hit for hit in hits if not scope or spaces.get(hit.meeting_id, "") == scope
+                ][:12]
                 self._send(
                     {
                         "semantic": semantic,
+                        "scope": scope,
                         "hits": [
                             {
                                 "meeting_id": hit.meeting_id,
                                 "meeting": hit.meeting_title,
                                 "date": hit.meeting_date,
+                                "space": spaces.get(hit.meeting_id, ""),
                                 "start": hit.start,
                                 "speaker": hit.speaker,
                                 "text": hit.text,
                             }
-                            for hit in hits
+                            for hit in chosen
                         ],
                     }
                 )

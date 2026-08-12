@@ -228,6 +228,19 @@ aside {
 .pill.pending { color: var(--color-terminal-amber); border-color: rgba(255,189,46,0.3); }
 .pill.busy { color: var(--color-accent-text); border-color: var(--color-accent-border); }
 
+/* The global search returns passages, which does not answer "open the pricing
+   one from Tuesday". Filtering the list by title does. */
+.filterbox { padding: 0 var(--space-4) var(--space-3); }
+.filterbox input { padding: 7px 10px; font-size: var(--text-mono-sm); }
+.meeting.cursor { outline: 1px solid var(--color-accent-border); outline-offset: -1px; }
+
+/* Keyboard users could not see where they were: hover was styled, focus was
+   not, and `title` tooltips never reach them at all. */
+button:focus-visible, input:focus-visible, select:focus-visible,
+.tab:focus-visible, .meeting:focus-visible, .turn:focus-visible {
+  outline: 2px solid var(--color-accent-text); outline-offset: 1px;
+}
+
 /* spaces: a label on a meeting, never a directory on disk */
 .addspace {
   font-family: var(--font-mono); font-size: var(--text-mono-sm);
@@ -484,6 +497,7 @@ pre.log.failed { border-left-color: var(--color-terminal-red); }
     <input type="text" id="search" placeholder="buscar en todo el histórico…">
     <div class="k">ctrl k</div>
   </div>
+  <select id="scope" title="Limitar la búsqueda a un espacio"></select>
   <div class="statuses" id="statuses"></div>
   <button id="rec">● nueva reunión</button>
 </header>
@@ -507,6 +521,9 @@ pre.log.failed { border-left-color: var(--color-terminal-red); }
         <div class="count" id="count"></div>
         <div class="addspace" id="addspace" title="Crear un espacio">+ espacio</div>
       </div>
+    </div>
+    <div class="filterbox">
+      <input type="text" id="filter" placeholder="filtrar por título…">
     </div>
     <div id="meetings"></div>
   </aside>
@@ -591,6 +608,7 @@ let wasProcessing = null;
 async function refresh() {
   try { state = await api('/api/state'); } catch (e) { return; }
   renderStatuses();
+  renderScope();
   renderRecord();
   renderMeetings();
 
@@ -624,6 +642,17 @@ function schedule() {
 }
 
 // ── header ────────────────────────────────────────────────
+function renderScope() {
+  const spaces = state.spaces || [];
+  const picker = $('scope');
+  picker.style.display = spaces.length ? 'block' : 'none';
+  if (!spaces.length) return;
+  const current = picker.value;
+  picker.innerHTML = `<option value="">todo</option>`
+    + spaces.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  picker.value = spaces.includes(current) ? current : '';
+}
+
 function renderStatuses() {
   const devices = state.devices || {};
   const bits = [
@@ -751,6 +780,7 @@ $('recstop').onclick = async () => {
 // ── meetings ──────────────────────────────────────────────
 const UNASSIGNED = '__none__';
 let collapsed = new Set(JSON.parse(localStorage.getItem('hcw-collapsed') || '[]'));
+let filterText = '';
 
 function meetingRow(m, busyOn) {
   return `<div class="meeting ${m.name === selected ? 'active' : ''}" data-name="${esc(m.name)}">
@@ -764,24 +794,41 @@ function meetingRow(m, busyOn) {
     </div>`;
 }
 
+function visibleMeetings() {
+  const needle = filterText.trim().toLowerCase();
+  if (!needle) return state.meetings;
+  return state.meetings.filter(m =>
+    (m.title || '').toLowerCase().includes(needle) || (m.date || '').includes(needle));
+}
+
 function renderMeetings() {
   const busyOn = state.processing && !state.processing.done ? state.processing.meeting : null;
   const spaces = state.spaces || [];
-  $('count').textContent = state.meetings.length || '';
+  const shown = visibleMeetings();
+  $('count').textContent = filterText.trim()
+    ? `${shown.length}/${state.meetings.length}` : (state.meetings.length || '');
 
   if (!state.meetings.length && !spaces.length) {
     $('meetings').innerHTML = `<div class="listhead empty">
       <b>Todavía nada</b>dale a nueva reunión arriba a la derecha</div>`;
     return;
   }
+  if (!shown.length) {
+    $('meetings').innerHTML = `<div class="listhead empty">nada con “${esc(filterText)}”</div>`;
+    return;
+  }
 
   // Every declared space gets a group even when it is empty — that is the point
-  // of keeping a registry instead of deriving the list from the meetings.
+  // of keeping a registry instead of deriving the list from the meetings. While
+  // a filter is active, empty groups are noise, so they go.
   const groups = new Map(spaces.map(name => [name, []]));
   groups.set(UNASSIGNED, []);
-  for (const m of state.meetings) {
+  for (const m of shown) {
     const key = m.space && groups.has(m.space) ? m.space : UNASSIGNED;
     groups.get(key).push(m);
+  }
+  if (filterText.trim()) {
+    for (const [name, items] of [...groups]) if (!items.length) groups.delete(name);
   }
 
   let html = '';
@@ -818,6 +865,15 @@ function renderMeetings() {
     el.onclick = (event) => { event.stopPropagation(); editSpace(el.dataset.editspace); };
   });
 }
+
+$('filter').oninput = () => { filterText = $('filter').value; renderMeetings(); };
+$('filter').onkeydown = (event) => {
+  if (event.key === 'Escape') { $('filter').value = ''; filterText = ''; renderMeetings(); }
+  if (event.key === 'Enter') {
+    const first = visibleMeetings()[0];
+    if (first) { $('filter').blur(); select(first.name); }
+  }
+};
 
 $('addspace').onclick = async () => {
   const name = await promptDialog('Nuevo espacio', 'Nombre del espacio', '');
@@ -923,8 +979,11 @@ function speakerColor(name) {
 function renderDetail() {
   if (searching) return;
   if (!selected || !detail) {
-    $('pane').innerHTML = `<div class="blank"><div class="empty">
-      <b>Nada seleccionado</b>elige una reunión de la izquierda,<br>o graba una nueva</div></div>`;
+    $('pane').innerHTML = `<div class="blank">${
+      state.meetings.length ? `<div class="empty">
+        <b>Nada seleccionado</b>elige una reunión de la izquierda,<br>
+        o muévete con <code>j</code> y <code>k</code></div>` : firstRun()}</div>`;
+    if (!state.meetings.length) wireRows();
     return;
   }
   const meta = detail.meta || {};
@@ -1003,6 +1062,37 @@ peticiones a internet. Sirve para mandársela a alguien que no tiene la herramie
       </div>`).join('') || '<div class="empty">sin transcripción</div>';
   }
   paint(html);
+}
+
+// Somebody opening this for the first time has no meetings and possibly no key.
+// A single grey line saying "todavía nada" tells them nothing about what is
+// missing or what to do about it.
+function firstRun() {
+  const devices = state.devices || {};
+  const checks = [
+    { ok: !!devices.mic, label: 'micrófono',
+      detail: devices.mic || 'no se encontró ninguno — sin esto no se puede grabar' },
+    { ok: !!devices.system, label: 'audio del sistema',
+      detail: devices.system || 'sin loopback: se grabaría solo tu voz, no la de los demás' },
+    { ok: !!state.has_key, label: 'clave de la API',
+      detail: state.has_key ? 'encontrada' : 'falta HELMCODE_API_KEY: grabar sí, transcribir no' },
+  ];
+  return `<div style="max-width:520px;text-align:left">
+    <div class="eyebrow">primera vez</div>
+    <h1 style="cursor:default">Graba tu primera reunión</h1>
+    <p>Se graban dos pistas por separado —tu micrófono y lo que sale por los altavoces—
+       y al parar se transcribe, se separan las voces y se escriben las notas.</p>
+    <div class="steps" style="margin-top:24px">
+      ${checks.map(c => `<div class="stepline ${c.ok ? 'done' : 'failed'}">
+        <div class="mark">${c.ok ? '✓' : '×'}</div>
+        <div class="what">${c.label}</div>
+        <div class="side">${esc(c.detail)}</div></div>`).join('')}
+    </div>
+    <p class="hint" style="margin-top:16px">Ponte auriculares si puedes: evita que el
+      micrófono recoja a los demás y haya que adivinar qué era eco.</p>
+    ${devices.mic ? `<div class="actions" style="margin-top:20px">
+      <button data-act="first-record">● nueva reunión</button></div>` : ''}
+  </div>`;
 }
 
 // ── notes: reading and correcting ─────────────────────────
@@ -1281,6 +1371,8 @@ async function act(what, element) {
       });
       toast(filled ? `${filled} nombres propuestos — revísalos y guarda`
                    : 'el transcript no dice cómo se llaman');
+    } else if (what === 'first-record') {
+      $('rec').onclick();
     } else if (what === 'toggle-log') {
       showLog = !showLog; renderDetail();
     } else if (what === 'edit-notes') {
@@ -1475,12 +1567,36 @@ $('search').oninput = () => {
   if (!term) { searching = false; renderDetail(); return; }
   searchTimer = setTimeout(() => runSearch(term), 320);
 };
+$('scope').onchange = () => {
+  const term = $('search').value.trim();
+  if (term) runSearch(term);
+};
+
+const typing = () => /input|textarea|select/i.test(document.activeElement?.tagName || '');
 
 document.addEventListener('keydown', (event) => {
-  if ((event.ctrlKey || event.metaKey) && event.key === 'k') { event.preventDefault(); $('search').focus(); $('search').select(); }
-  if (event.key === 'Escape' && document.activeElement === $('search')) { $('search').value = ''; searching = false; $('search').blur(); renderDetail(); }
-  if (event.key === ' ' && detail?.has_audio && !/input/i.test(document.activeElement.tagName)) {
-    event.preventDefault(); $('pp').onclick();
+  if ((event.ctrlKey || event.metaKey) && event.key === 'k') {
+    event.preventDefault(); $('search').focus(); $('search').select(); return;
+  }
+  if (event.key === 'Escape' && document.activeElement === $('search')) {
+    $('search').value = ''; searching = false; $('search').blur(); renderDetail(); return;
+  }
+  if (typing()) return;
+
+  if (event.key === ' ' && detail?.has_audio) { event.preventDefault(); $('pp').onclick(); }
+  if (event.key === '/') { event.preventDefault(); $('filter').focus(); $('filter').select(); }
+  // j and k walk the list that is actually on screen, filter included, so the
+  // keys agree with what the eye can see.
+  if (event.key === 'j' || event.key === 'k' || event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const list = visibleMeetings();
+    if (!list.length) return;
+    event.preventDefault();
+    const forward = event.key === 'j' || event.key === 'ArrowDown';
+    const at = list.findIndex(m => m.name === selected);
+    const next = at < 0 ? (forward ? 0 : list.length - 1)
+                        : Math.min(list.length - 1, Math.max(0, at + (forward ? 1 : -1)));
+    select(list[next].name);
+    document.querySelector('.meeting.active')?.scrollIntoView({ block: 'nearest' });
   }
 });
 
@@ -1490,12 +1606,16 @@ async function runSearch(term) {
   renderMeetings();
   $('pane').innerHTML = skeleton();
   try {
-    const result = await api('/api/search?q=' + encodeURIComponent(term));
-    let html = `<div class="eyebrow">resultados</div><h1>${esc(term)}</h1>`;
+    const scope = $('scope').value;
+    const result = await api('/api/search?q=' + encodeURIComponent(term)
+      + (scope ? '&space=' + encodeURIComponent(scope) : ''));
+    let html = `<div class="eyebrow">resultados${scope ? ' · ' + esc(scope) : ''}</div>
+      <h1 style="cursor:default">${esc(term)}</h1>`;
     if (!result.semantic) html += '<div class="warn">solo búsqueda por palabras — sin embeddings disponibles</div>';
     html += result.hits.length ? result.hits.map(h => `
       <div class="hit" data-meeting="${esc(h.meeting_id)}" data-start="${h.start}">
-        <div class="hit-head"><b>${esc(h.meeting)}</b> · ${esc(h.date)} · ${mmss(h.start)} · <span class="sp">${esc(h.speaker)}</span></div>
+        <div class="hit-head"><b>${esc(h.meeting)}</b> · ${esc(h.date)} · ${mmss(h.start)} · <span class="sp">${esc(h.speaker)}</span>${
+          h.space && !scope ? ` · ${esc(h.space)}` : ''}</div>
         <div class="hit-text">${esc(h.text)}</div>
       </div>`).join('')
       : `<div class="empty"><b>Nada encontrado</b>prueba con otras palabras — la búsqueda es por significado,<br>
