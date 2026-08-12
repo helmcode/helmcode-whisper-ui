@@ -96,16 +96,21 @@ header {
   color: var(--color-text-placeholder); pointer-events: none;
   border: 0.5px solid var(--color-border); padding: 2px 5px;
 }
-.statuses { margin-left: auto; display: flex; gap: var(--space-4); align-items: center; }
-.status { display: flex; align-items: center; gap: 6px; }
+/* A row of coloured dots is a puzzle. Each one says what it is, and hovering
+   says which device it found. */
+.statuses { margin-left: auto; display: flex; gap: var(--space-3); align-items: center; }
+.status {
+  display: flex; align-items: center; gap: 6px; cursor: default;
+  border: 0.5px solid var(--color-border); padding: 5px 9px;
+}
 .status i { width: 6px; height: 6px; background: var(--color-terminal-green); flex: 0 0 auto; }
-.status.bad i { background: var(--color-terminal-red); }
 .status.warn i { background: var(--color-terminal-amber); }
+.status.bad i { background: var(--color-terminal-red); }
 .status span {
   font-family: var(--font-mono); font-size: var(--text-mono-sm);
-  letter-spacing: var(--tracking-mono-sm); color: var(--color-text-tertiary);
-  text-transform: uppercase;
+  letter-spacing: var(--tracking-mono-sm); color: var(--color-text-secondary);
 }
+.status.warn span, .status.bad span { color: var(--color-text-primary); }
 
 /* ── controls ──────────────────────────────────────────────── */
 input[type="text"] {
@@ -154,29 +159,41 @@ aside {
   display: flex; flex-direction: column; min-height: 0;
 }
 
-/* record panel */
-.record {
-  padding: var(--space-4) var(--space-4) var(--space-5);
-  border-bottom: 0.5px solid var(--color-border);
+/* recording strip */
+.recbar {
+  display: none; flex: 0 0 auto; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-accent-dim);
+  border-bottom: 0.5px solid var(--color-accent-border);
 }
-.record .row { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
-.record .row button { flex: 1 1 auto; text-align: center; }
-.devwarn {
-  font-family: var(--font-mono); font-size: var(--text-mono-sm);
-  letter-spacing: var(--tracking-mono-sm); line-height: 1.5;
-  color: var(--color-terminal-amber); margin-top: var(--space-3);
+.recbar.on { display: flex; }
+.recbar .rectitle {
+  font-size: 14px; color: var(--color-text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto;
 }
-.devwarn.bad { color: var(--color-terminal-red); }
-
-.live { margin-top: var(--space-3); }
-.live-top { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-terminal-red); animation: pulse 1.4s infinite; flex: 0 0 auto; }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.2 } }
 .elapsed { font-family: var(--font-mono); font-size: 15px; color: var(--color-accent-text); letter-spacing: 0.02em; }
-.meter-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 6px; }
-.meter-row span { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); width: 42px; }
-.meter { flex: 1 1 auto; height: 3px; background: var(--color-surface-raised); position: relative; overflow: hidden; }
-.meter i { position: absolute; inset: 0 100% 0 0; background: var(--color-accent); transition: right 90ms linear; }
+.meters { display: flex; gap: var(--space-4); }
+.meter-row { display: flex; align-items: center; gap: var(--space-2); }
+.meter-row span { font-family: var(--font-mono); font-size: var(--text-mono-sm); color: var(--color-text-tertiary); }
+.meter { width: 90px; height: 3px; background: rgba(255,255,255,0.10); position: relative; overflow: hidden; }
+.meter i { position: absolute; inset: 0 100% 0 0; background: var(--color-accent-text); transition: right 90ms linear; }
+
+/* the start dialog */
+.field { margin-bottom: var(--space-4); }
+.field label { display: block; margin-bottom: var(--space-2); }
+.devlist { font-family: var(--font-mono); font-size: var(--text-mono); line-height: 1.9; }
+.devlist div { display: flex; gap: var(--space-2); }
+.devlist b { font-weight: 400; color: var(--color-text-tertiary); width: 62px; flex: 0 0 auto; }
+.devlist .ok { color: var(--color-text-secondary); }
+.devlist .missing { color: var(--color-terminal-amber); }
+.note {
+  font-family: var(--font-mono); font-size: var(--text-mono-sm); line-height: 1.6;
+  letter-spacing: var(--tracking-mono-sm); color: var(--color-terminal-amber);
+  border-left: 2px solid var(--color-terminal-amber); padding-left: var(--space-3);
+  margin: var(--space-4) 0;
+}
 
 /* meeting list */
 .listhead { padding: var(--space-4) var(--space-4) var(--space-2); display: flex; justify-content: space-between; align-items: baseline; }
@@ -342,23 +359,22 @@ pre.log.failed { border-left-color: var(--color-terminal-red); }
     <div class="k">ctrl k</div>
   </div>
   <div class="statuses" id="statuses"></div>
+  <button id="rec">● nueva reunión</button>
 </header>
+
+<!-- While a take is running this sits across the whole width: you should not be
+     able to forget that the microphone is open. -->
+<div class="recbar" id="recbar">
+  <div class="dot"></div>
+  <div class="eyebrow">grabando</div>
+  <div class="elapsed" id="elapsed">00:00:00</div>
+  <div id="meters" class="meters"></div>
+  <div class="rectitle" id="rectitle"></div>
+  <button id="recstop" class="stop">■ parar</button>
+</div>
 
 <main>
   <aside>
-    <div class="record">
-      <div class="eyebrow">grabar</div>
-      <div id="idle">
-        <div class="row" style="margin-top:12px"><input type="text" id="title" placeholder="título de la reunión"></div>
-        <div class="row"><button id="rec">● grabar</button></div>
-      </div>
-      <div class="live" id="live" style="display:none">
-        <div class="live-top"><div class="dot"></div><div class="elapsed" id="elapsed">00:00:00</div></div>
-        <div id="meters"></div>
-        <div class="row"><button id="recstop" class="stop">■ parar</button></div>
-      </div>
-      <div id="devwarn" class="devwarn" style="display:none"></div>
-    </div>
     <div class="listhead"><div class="eyebrow">reuniones</div><div class="count" id="count"></div></div>
     <div id="meetings"></div>
   </aside>
@@ -369,7 +385,9 @@ pre.log.failed { border-left-color: var(--color-terminal-red); }
       <button class="ghost icon" id="pp">▶</button>
       <div class="time"><b id="cur">00:00</b> / <span id="dur">00:00</span></div>
       <div class="seek" id="seek"><div class="track"><div class="fill" id="fill"></div><div class="head" id="head"></div></div></div>
-      <div class="follow on" id="follow">seguir</div>
+      <div class="follow on" id="follow"
+        title="Cuando está activo, la transcripción hace scroll sola para seguir el audio.
+Desactívalo para leer otra parte sin que te arrastre.">↓ autoscroll</div>
     </div>
   </div>
 </main>
@@ -471,48 +489,85 @@ function schedule() {
 function renderStatuses() {
   const devices = state.devices || {};
   const bits = [
-    { ok: !!devices.mic, label: 'micro' },
-    { ok: !!devices.system, warn: true, label: 'sistema' },
-    { ok: !!state.has_key, warn: true, label: 'api' },
+    { label: 'micrófono', ok: !!devices.mic, detail: devices.mic || 'no se ha encontrado ninguno',
+      level: 'bad' },
+    { label: 'audio del sistema', ok: !!devices.system,
+      detail: devices.system || 'sin loopback: solo se grabaría tu micrófono', level: 'warn' },
+    { label: 'api', ok: !!state.has_key,
+      detail: state.has_key ? 'clave encontrada' : 'sin HELMCODE_API_KEY: grabar sí, procesar no',
+      level: 'warn' },
   ];
   $('statuses').innerHTML = bits.map(b =>
-    `<div class="status ${b.ok ? '' : (b.warn ? 'warn' : 'bad')}"><i></i><span>${b.label}</span></div>`
-  ).join('');
+    `<div class="status ${b.ok ? '' : b.level}" title="${esc(b.detail)}">
+       <i></i><span>${b.label}</span></div>`).join('');
 }
 
 function renderRecord() {
   const live = state.recording;
-  $('idle').style.display = live ? 'none' : 'block';
-  $('live').style.display = live ? 'block' : 'none';
-
-  const devices = state.devices || {};
-  // Said before the recording, not after it. A missing loopback means the
-  // meeting is captured with the microphone only, and by the time anyone
-  // notices, the meeting has happened.
-  let problem = '', bad = false;
-  if (!devices.mic) { problem = 'sin micrófono: la grabación no va a funcionar'; bad = true; }
-  else if (!devices.system && !live) problem = 'sin audio de sistema: solo se grabará tu micrófono';
-  $('devwarn').textContent = problem;
-  $('devwarn').className = 'devwarn' + (bad ? ' bad' : '');
-  $('devwarn').style.display = problem ? 'block' : 'none';
-  $('rec').disabled = !devices.mic;
-
+  $('recbar').classList.toggle('on', !!live);
+  $('rec').disabled = !!live || !(state.devices || {}).mic;
   if (!live) return;
+
   $('elapsed').textContent = hms(live.elapsed);
+  $('rectitle').textContent = live.title || '';
   $('meters').innerHTML = live.tracks.map(t => `
     <div class="meter-row">
-      <span>${esc(t.label)}</span>
+      <span>${t.label === 'me' ? 'tú' : 'sistema'}</span>
       <div class="meter"><i style="right:${Math.max(0, 100 - Math.min(100, t.level*160))}%"></i></div>
     </div>`).join('');
 }
 
-$('rec').onclick = async () => {
-  $('rec').disabled = true;
-  try {
-    await post('/api/record/start', { title: $('title').value || 'reunión' });
-    $('title').value = '';
-    await refresh();
-  } catch (e) { toast(e.message, 'bad'); $('rec').disabled = false; }
+// Starting a take is a decision with a pre-flight: which devices are about to
+// be used, and whether one of them is missing. That does not fit next to a
+// search field, so it gets a dialog of its own.
+$('rec').onclick = () => {
+  const devices = state.devices || {};
+  const scrim = document.createElement('div');
+  scrim.className = 'scrim';
+  scrim.innerHTML = `<div class="modal">
+    <div class="eyebrow">nueva reunión</div>
+    <h3>Grabar</h3>
+    <div class="field">
+      <label class="eyebrow">título</label>
+      <input type="text" id="newmeeting" placeholder="reunión" value="">
+    </div>
+    <div class="field">
+      <label class="eyebrow">se va a grabar de</label>
+      <div class="devlist">
+        <div><b>tú</b><span class="${devices.mic ? 'ok' : 'missing'}">${
+          esc(devices.mic || 'ningún micrófono encontrado')}</span></div>
+        <div><b>los demás</b><span class="${devices.system ? 'ok' : 'missing'}">${
+          esc(devices.system || 'sin audio de sistema')}</span></div>
+      </div>
+    </div>
+    ${devices.system ? '' : `<div class="note">Sin audio de sistema solo se grabará tu
+      micrófono, así que de la reunión se transcribirá únicamente lo que digas tú.</div>`}
+    <div class="note">Grabar a alguien sin decírselo es ilegal en muchos sitios y una mala
+      idea en todos. Dilo antes de empezar.</div>
+    <div class="row">
+      <button class="ghost" data-no>cancelar</button>
+      <button data-yes ${devices.mic ? '' : 'disabled'}>empezar a grabar</button>
+    </div></div>`;
+
+  const close = () => { scrim.remove(); document.removeEventListener('keydown', onKey); };
+  const start = async () => {
+    const title = $('newmeeting').value.trim() || 'reunión';
+    close();
+    try {
+      await post('/api/record/start', { title });
+      await refresh();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+  const onKey = (event) => {
+    if (event.key === 'Escape') close();
+    if (event.key === 'Enter' && devices.mic) start();
+  };
+  scrim.querySelector('[data-no]').onclick = close;
+  scrim.querySelector('[data-yes]').onclick = start;
+  scrim.onclick = (event) => { if (event.target === scrim) close(); };
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(scrim);
+  $('newmeeting').focus();
 };
 
 $('recstop').onclick = async () => {
@@ -618,10 +673,19 @@ function renderDetail() {
 
   html += `<div class="actions">
     ${detail.notes ? `<button class="ghost" data-act="reprocess">volver a procesar</button>` : ''}
-    ${(detail.files||[]).includes('notes.html') ? `<button class="ghost" data-act="html">abrir notes.html</button>` : ''}
-    ${(detail.raw_speakers||[]).length ? `<button class="ghost" data-act="speakers">nombres</button>` : ''}
-    <button class="ghost" data-act="rename">renombrar</button>
-    <button class="ghost" data-act="reveal">carpeta</button>
+    ${(detail.files||[]).includes('notes.html')
+      ? `<button class="ghost" data-act="html"
+           title="Abre notes.html: una página autocontenida, con los estilos dentro y sin
+peticiones a internet. Sirve para mandársela a alguien que no tiene la herramienta."
+         >compartir</button>` : ''}
+    ${(detail.raw_speakers||[]).length
+      ? `<button class="ghost" data-act="speakers"
+           title="Poner nombre a cada voz que detectó la diarización"
+         >nombres de las voces</button>` : ''}
+    <button class="ghost" data-act="rename" title="Cambiar el título de la reunión">renombrar</button>
+    <button class="ghost" data-act="reveal"
+      title="Abre el explorador en la carpeta de esta reunión: el audio, las notas y el transcript"
+      >ver ficheros</button>
     <button class="ghost danger" data-act="delete">borrar</button>
   </div>`;
 
@@ -838,7 +902,11 @@ $('seek').onclick = (event) => {
   const total = isFinite(audio.duration) ? audio.duration : ((detail?.meta||{}).duration_seconds || 0);
   if (total) seekTo(((event.clientX - box.left) / box.width) * total);
 };
-$('follow').onclick = () => { following = !following; $('follow').className = 'follow' + (following ? ' on' : ''); };
+$('follow').onclick = () => {
+  following = !following;
+  $('follow').className = 'follow' + (following ? ' on' : '');
+  $('follow').textContent = (following ? '↓ ' : '') + 'autoscroll';
+};
 
 // ── search ────────────────────────────────────────────────
 let searchTimer = null;
